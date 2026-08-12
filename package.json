@@ -8,8 +8,8 @@
   "scripts": {
     "start": "electron .",
     "fetch-tools": "node scripts/fetch-tools.js",
-    "dist": "electron-builder --win",
-    "dist:portable": "electron-builder --win portable"
+    "dist": "electron-builder --win --publish never",
+    "dist:portable": "electron-builder --win portable --publish never"
   },
   "devDependencies": {
     "electron": "^31.7.7",
