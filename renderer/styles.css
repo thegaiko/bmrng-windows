@@ -5,6 +5,7 @@
   --good:#17A957; --warn:#B7791F; --danger:#DA3B40; --lite:#E7EDF8;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none !important}
 body{font-family:'Golos Text',system-ui,sans-serif;background:var(--bg);color:var(--ink);overflow:hidden;user-select:none}
 .u{font-family:'Unbounded',sans-serif}
 .muted{color:var(--dim);font-size:13px;line-height:1.5}
