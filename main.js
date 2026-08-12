@@ -20,6 +20,10 @@ function ipatoolPath() {
     "/opt/homebrew/bin/ipatool", "/usr/local/bin/ipatool",
   ]) || (isWin ? "ipatool.exe" : "ipatool");
 }
+// Файловый keyring ipatool (обходит лимит Windows Credential Manager ~2.5КБ)
+const IPA_PASS = "bmrng-local-keychain";
+function ipa(args) { return [...args, "--keychain-passphrase", IPA_PASS]; }
+
 function pythonBase() {
   const bundled = path.join(resDir(), "vendor", "python", isWin ? "python.exe" : "bin/python3");
   const cmd = firstExisting([
@@ -94,24 +98,30 @@ ipcMain.handle("devices", async () => {
 });
 
 ipcMain.handle("account-info", async () => {
-  const r = await run(ipatoolPath(), ["auth", "info", "--format", "json", "--non-interactive"]);
+  const r = await run(ipatoolPath(), ipa(["auth", "info", "--format", "json", "--non-interactive"]));
   const o = lastJSON(r.out);
   if (o && o.success && (o.name || o.email)) return o.name || o.email;
   return null;
 });
 
 ipcMain.handle("account-login", async (_e, { email, password, code }) => {
+  const tool = ipatoolPath();
   const args = ["auth", "login", "-e", email, "-p", password, "--format", "json", "--non-interactive"];
   if (code) args.push("--auth-code", code);
-  const r = await run(ipatoolPath(), args);
+  const r = await run(tool, ipa(args));
   const low = r.out.toLowerCase();
-  if (r.code === 0 || (lastJSON(r.out) || {}).success) return { ok: true };
-  if (low.includes("code is required") || low.includes("2fa") || low.includes("auth-code"))
+  const j = lastJSON(r.out) || {};
+  if (r.code === 0 || j.success) return { ok: true };
+  if (low.includes("code is required") || low.includes("2fa") || low.includes("two-factor") ||
+      low.includes("auth-code") || low.includes("authentication code") ||
+      low.includes("configurator_message"))
     return { ok: false, needCode: true };
-  return { ok: false, error: (lastJSON(r.out) || {}).error || "Не удалось войти" };
+  // отдаём реальный текст ошибки ipatool (или ошибку запуска), чтобы было видно причину
+  const raw = (j.error || r.out || "").toString().trim().replace(/\s+/g, " ").slice(-320);
+  return { ok: false, error: raw || `Не удалось войти (ipatool: ${tool})` };
 });
 
-ipcMain.handle("account-logout", async () => { await run(ipatoolPath(), ["auth", "revoke"]); return true; });
+ipcMain.handle("account-logout", async () => { await run(ipatoolPath(), ipa(["auth", "revoke"])); return true; });
 
 ipcMain.handle("catalog", async () => catalog());
 
@@ -122,7 +132,7 @@ async function probeOne(key, selector) {
   const tmp2 = tmp + ".tmp";
   [tmp, tmp2].forEach((f) => { try { fs.unlinkSync(f); } catch {} });
   return new Promise((resolve) => {
-    const child = spawn(tool, ["download", ...selector, "-o", tmp, "--format", "json", "--non-interactive"],
+    const child = spawn(tool, ipa(["download", ...selector, "-o", tmp, "--format", "json", "--non-interactive"]),
       { env: { ...process.env } });
     let out = ""; let started = false;
     child.stdout.on("data", (d) => (out += d)); child.stderr.on("data", (d) => (out += d));
@@ -163,39 +173,39 @@ ipcMain.handle("check-owned", async (_e, app) => {
 ipcMain.handle("install", async (e, { app, udid }) => {
   const tool = ipatoolPath(); const py = pythonBase();
   const send = (m) => e.sender.send("install-progress", m);
-  const ipa = path.join(os.tmpdir(), `${app.key}.ipa`);
-  try { fs.unlinkSync(ipa); } catch {}
+  const ipaFile = path.join(os.tmpdir(), `${app.key}.ipa`);
+  try { fs.unlinkSync(ipaFile); } catch {}
 
   send({ phase: "download", app: app.name, line: `Скачивание «${app.name}»…` });
   const sels = selectors(app); let ok = false; let lastOut = "";
   for (let i = 0; i < sels.length; i++) {
     const sel = sels[i];
     if (sels.length > 1) send({ line: `Вариант ${i + 1}/${sels.length}…` });
-    let r = await run(tool, ["download", ...sel, "-o", ipa, "--format", "json", "--non-interactive"]);
+    let r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]));
     lastOut = r.out;
-    if (fs.existsSync(ipa) && (lastJSON(r.out) || {}).success) { ok = true; break; }
+    if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; break; }
     if (r.out.toLowerCase().includes("license is required")) {
       send({ line: "Приобретаю лицензию…" });
-      r = await run(tool, ["download", ...sel, "-o", ipa, "--purchase", "--format", "json", "--non-interactive"]);
+      r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--purchase", "--format", "json", "--non-interactive"]));
       lastOut = r.out;
-      if (fs.existsSync(ipa) && (lastJSON(r.out) || {}).success) { ok = true; break; }
+      if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; break; }
     }
-    try { fs.unlinkSync(ipa); } catch {}
+    try { fs.unlinkSync(ipaFile); } catch {}
   }
   if (!ok) {
-    const err = (lastJSON(lastOut) || {}).error || "не удалось скачать";
+    const err = (lastJSON(lastOut) || {}).error || (lastOut || "").toString().trim().replace(/\s+/g, " ").slice(-300) || "не удалось скачать";
     send({ phase: "error", line: `✗ ${err}` });
     return { ok: false, error: err };
   }
   send({ phase: "install", progress: 0, line: "Устанавливаю на iPhone…" });
-  const ir = await run(py.cmd, [...py.pre, "apps", "install", ipa], {
+  const ir = await run(py.cmd, [...py.pre, "apps", "install", ipaFile], {
     env: { PYMOBILEDEVICE3_UDID: udid },
     onData: (s) => {
       const m = s.match(/(\d{1,3})%\s*Complete/);
       if (m) send({ phase: "install", progress: Number(m[1]) / 100, line: `${m[1]}% — установка` });
     },
   });
-  try { fs.unlinkSync(ipa); } catch {}
+  try { fs.unlinkSync(ipaFile); } catch {}
   if (ir.code === 0 || ir.out.includes("Installation succeed")) { send({ phase: "done", progress: 1, line: "✓ Установлено" }); return { ok: true }; }
   send({ phase: "error", line: "✗ ошибка установки" });
   return { ok: false, error: "install failed" };
