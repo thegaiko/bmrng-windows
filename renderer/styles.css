@@ -87,6 +87,12 @@ button{font-family:inherit;cursor:pointer}
 
 .install-bar{padding:14px 20px;border-top:1px solid var(--line)}
 .install-bar .btn-primary{width:100%}
+.progress{margin-bottom:12px}
+.bar{height:9px;background:var(--chip);border:1px solid var(--line);border-radius:99px;overflow:hidden;position:relative}
+.fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent-soft));border-radius:99px;transition:width .3s ease}
+.fill.indeterminate{width:35%;position:absolute;animation:indet 1.15s ease-in-out infinite}
+@keyframes indet{0%{left:-35%}100%{left:100%}}
+.progress-text{font-size:12.5px;color:var(--dim);margin-top:7px;text-align:center;font-weight:600}
 
 /* модалки */
 .modal{position:fixed;inset:0;background:rgba(8,14,29,.35);display:flex;align-items:center;justify-content:center;z-index:20}

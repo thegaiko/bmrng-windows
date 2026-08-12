@@ -264,6 +264,7 @@ async function installList(list) {
   if (!state.account) return alert("Войдите в Apple ID");
   if (!list.length) return;
   setBusyMain(true);
+  showProgress(true); setBar(null, "Подготовка…");
   log(`\n── Установка ${list.length} приложени(й) на ${state.device.name} ──`);
   let done = 0;
   for (let i = 0; i < list.length; i++) {
@@ -273,15 +274,36 @@ async function installList(list) {
   }
   log(`\nГотово: ${done} из ${list.length} установлено.`);
   $("#phone-screen").innerHTML = done ? "<div>✓<br>Готово</div>" : "<div>✗<br>Ошибка</div>";
+  setBar(done ? 1 : 0, done ? `Установлено: ${done} из ${list.length}` : "Не удалось");
   setBusyMain(false);
+  setTimeout(() => showProgress(false), 3000);
   setTimeout(refreshDevices, 2500);
 }
 
 function onProgress(m) {
   if (m.line) log("  " + m.line);
   const scr = $("#phone-screen");
-  if (m.phase === "download") scr.innerHTML = `<div>↓<br>${m.app || ""}</div>`;
-  if (m.phase === "install") scr.innerHTML = `<div style="font-size:22px;font-weight:700">${Math.round((m.progress || 0) * 100)}%</div><div style="opacity:.7">установка</div>`;
+  showProgress(true);
+  if (m.phase === "download") {
+    const mb = m.bytes ? (m.bytes / 1048576).toFixed(0) + " МБ" : "";
+    setBar(null, `Скачивание${m.app ? " " + m.app : ""}${mb ? " · " + mb : "…"}`);
+    scr.innerHTML = `<div>↓<br>${m.app || ""}${mb ? `<br><span style="opacity:.7;font-size:10px">${mb}</span>` : ""}</div>`;
+  } else if (m.phase === "install") {
+    const p = m.progress || 0;
+    setBar(p, `Установка · ${Math.round(p * 100)}%`);
+    scr.innerHTML = `<div style="font-size:22px;font-weight:700">${Math.round(p * 100)}%</div><div style="opacity:.7">установка</div>`;
+  } else if (m.phase === "done") {
+    setBar(1, "Готово");
+  } else if (m.phase === "error") {
+    setBar(0, "Ошибка");
+  }
+}
+function showProgress(on) { $("#progress").hidden = !on; }
+function setBar(p, text) {
+  const fill = $("#bar-fill");
+  if (p === null || p === undefined) fill.classList.add("indeterminate");
+  else { fill.classList.remove("indeterminate"); fill.style.width = Math.round(p * 100) + "%"; }
+  $("#progress-text").textContent = text || "";
 }
 
 function setBusyMain(b) { state.busy = b; $("#install").disabled = b; $("#check-owned").disabled = b; }

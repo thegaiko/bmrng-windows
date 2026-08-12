@@ -182,6 +182,12 @@ ipcMain.handle("install", async (e, { app, udid }) => {
   try { fs.unlinkSync(ipaFile); } catch {}
 
   send({ phase: "download", app: app.name, line: `Скачивание «${app.name}»…` });
+  // поллинг размера скачиваемого файла → прогресс в МБ
+  const dlPoll = setInterval(() => {
+    let sz = 0;
+    for (const f of [ipaFile, ipaFile + ".tmp"]) { try { sz += fs.statSync(f).size; } catch {} }
+    if (sz > 0) send({ phase: "download", app: app.name, bytes: sz });
+  }, 400);
   const sels = selectors(app); let ok = false; let lastOut = "";
   for (let i = 0; i < sels.length; i++) {
     const sel = sels[i];
@@ -197,6 +203,7 @@ ipcMain.handle("install", async (e, { app, udid }) => {
     }
     try { fs.unlinkSync(ipaFile); } catch {}
   }
+  clearInterval(dlPoll);
   if (!ok) {
     const err = (lastJSON(lastOut) || {}).error || (lastOut || "").toString().trim().replace(/\s+/g, " ").slice(-300) || "не удалось скачать";
     send({ phase: "error", line: `✗ ${err}` });
