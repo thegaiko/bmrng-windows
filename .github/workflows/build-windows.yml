@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # надёжное зеркало для бинарника Electron (github бывает флапает)
+  ELECTRON_MIRROR: https://registry.npmmirror.com/-/binary/electron/
+  ELECTRON_BUILDER_BINARIES_MIRROR: https://registry.npmmirror.com/-/binary/electron-builder-binaries/
+
 jobs:
   build:
     runs-on: windows-latest
@@ -21,30 +26,46 @@ jobs:
           node-version: "20"
 
       - name: Install npm deps
-        run: npm install --no-audit --no-fund
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 12
+          max_attempts: 3
+          command: npm install --no-audit --no-fund
 
       - name: Fetch ipatool.exe
-        run: npm run fetch-tools
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 8
+          max_attempts: 3
+          command: npm run fetch-tools
         env:
           IPA_ARCH: amd64
 
       - name: Bundle portable Python + pymobiledevice3
-        shell: pwsh
-        run: |
-          $h = @{ 'User-Agent' = 'bmrng-ci' }
-          $rel = Invoke-RestMethod -Headers $h https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest
-          $asset = $rel.assets | Where-Object { $_.name -like 'cpython-3.12.*-x86_64-pc-windows-msvc-install_only.tar.gz' } | Select-Object -First 1
-          Write-Host "Python build: $($asset.name)"
-          Invoke-WebRequest -Headers $h $asset.browser_download_url -OutFile py.tar.gz
-          New-Item -ItemType Directory -Force -Path vendor | Out-Null
-          tar -xzf py.tar.gz -C vendor
-          Remove-Item py.tar.gz
-          vendor\python\python.exe -m pip install --disable-pip-version-check --quiet pymobiledevice3
-          Get-ChildItem -Path vendor\python -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host "vendor content:"; Get-ChildItem vendor
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 12
+          max_attempts: 3
+          shell: pwsh
+          command: |
+            $h = @{ 'User-Agent' = 'bmrng-ci' }
+            $rel = Invoke-RestMethod -Headers $h https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest
+            $asset = $rel.assets | Where-Object { $_.name -like 'cpython-3.12.*-x86_64-pc-windows-msvc-install_only.tar.gz' } | Select-Object -First 1
+            Write-Host "Python build: $($asset.name)"
+            Invoke-WebRequest -Headers $h $asset.browser_download_url -OutFile py.tar.gz
+            New-Item -ItemType Directory -Force -Path vendor | Out-Null
+            if (Test-Path vendor/python) { Remove-Item -Recurse -Force vendor/python }
+            tar -xzf py.tar.gz -C vendor
+            Remove-Item py.tar.gz
+            vendor\python\python.exe -m pip install --disable-pip-version-check --quiet pymobiledevice3
+            Get-ChildItem -Path vendor\python -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
       - name: Build installer (nsis + portable)
-        run: npm run dist
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 15
+          max_attempts: 3
+          command: npm run dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
