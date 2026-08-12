@@ -1,0 +1,17 @@
+{
+  "apps": [
+    { "key": "max", "name": "MAX", "app_id": 6739530834, "logo": "max" },
+    { "key": "vk", "name": "ВКонтакте", "app_id": 564177498, "logo": "vk" },
+    { "key": "smartbudget", "name": "Совкомбанк", "app_id": 6764576497, "logo": "sovcombank" },
+    { "key": "avito", "name": "Авито", "app_id": 417281773, "logo": "avito" },
+    { "key": "yandexpay", "name": "Яндекс Пэй", "app_id": 1634422317, "logo": "yandexpay" },
+    { "key": "mailru", "name": "Почта Mail.ru", "app_id": 511310430, "logo": "mailru" },
+    { "key": "alfa", "name": "Альфа-Банк", "logo": "alfa",
+      "app_ids": [353127685, 6755534634, 6462336276, 6739035108, 6449542227, 6755510943, 6774584229, 6747703692, 1633409806, 1629700735] },
+    { "key": "alfainvest", "name": "Альфа Инвестиции", "app_id": 1187815798, "logo": "alfainvest" },
+    { "key": "sber", "name": "Сбербанк", "logo": "sber", "app_ids": [492224193, 6443619924] },
+    { "key": "sbermarket", "name": "Сбермаркет", "app_id": 6636482626, "logo": "sbermarket" },
+    { "key": "tbank", "name": "Т-Банк", "logo": "tbank", "app_ids": [6475807912, 6774629936] },
+    { "key": "tinvest", "name": "Т-Инвестиции", "app_id": 6763549416, "logo": "tbank" }
+  ]
+}

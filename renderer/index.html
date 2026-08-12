@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://bmrng.app">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@700;900&family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<title>bmrng</title>
+</head>
+<body>
+
+<!-- ОНБОРДИНГ -->
+<div id="onboarding" class="onb">
+  <div class="onb-card">
+    <img src="../assets/icon.png" class="onb-logo" alt="bmrng">
+    <div id="onb-body"></div>
+    <div id="onb-error" class="onb-error"></div>
+  </div>
+  <div class="onb-foot">bmrng.app · возвращаем приложения на iPhone</div>
+</div>
+
+<!-- ОСНОВНОЕ -->
+<div id="app" hidden>
+  <header class="hd">
+    <div class="brand"><img src="../assets/icon.png" class="brand-ico"><span class="u">bmrng</span></div>
+    <div class="hd-right">
+      <button id="btn-log" class="icon-btn" title="Журнал">☰</button>
+      <button id="profile" class="profile-chip"><span id="profile-ava" class="ava">b</span><span id="profile-name">Профиль</span></button>
+    </div>
+  </header>
+
+  <div class="cols">
+    <aside class="side">
+      <div class="phone-wrap">
+        <div id="phone" class="phone off">
+          <div class="notch"></div>
+          <div id="phone-screen" class="screen"></div>
+        </div>
+      </div>
+      <div id="dev-status" class="dev-status">iPhone не подключён</div>
+      <select id="dev-select" class="dev-select" hidden></select>
+
+      <div class="card apple-card">
+        <div class="ac-row"><span class="ac-label">APPLE ID</span><span id="ac-dot" class="dot off"></span></div>
+        <div id="ac-name" class="ac-name">Не подключён</div>
+        <div id="ac-actions" class="ac-actions"></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="card apps-card">
+        <div class="apps-head">
+          <span class="eyebrow">Приложения</span>
+          <div class="apps-head-actions">
+            <button id="select-all" class="link">Выбрать все</button>
+            <button id="check-owned" class="round-btn" title="Проверить покупки">✓</button>
+          </div>
+        </div>
+        <div id="apps-grid" class="apps-grid"></div>
+        <button id="add-id" class="add-id">＋ Нужного приложения нет? Установить по ID</button>
+      </div>
+    </main>
+  </div>
+
+  <div class="install-bar">
+    <button id="install" class="btn-primary" disabled>Установить</button>
+  </div>
+</div>
+
+<!-- модалка журнала -->
+<div id="log-modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b>Журнал</b><button id="log-close" class="link">Закрыть</button></div>
+    <pre id="log" class="log"></pre>
+  </div>
+</div>
+
+<!-- модалка добавить по ID -->
+<div id="id-modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b>Установить по App Store ID</b><button id="id-close" class="link">Закрыть</button></div>
+    <p class="muted">На iPhone зажмите иконку приложения → «Поделиться» → «Скопировать ссылку». Число после <b>id</b> — вставьте сюда.</p>
+    <div class="code-example">https://apps.apple.com/app/<b>id1634422317</b></div>
+    <input id="id-input" class="input" placeholder="Ссылка или ID">
+    <div class="modal-actions"><button id="id-install" class="btn-primary">Установить</button></div>
+  </div>
+</div>
+
+<!-- модалка профиля -->
+<div id="profile-modal" class="modal" hidden>
+  <div class="modal-card center">
+    <div id="profile-big-ava" class="big-ava">b</div>
+    <div id="profile-big-name" class="big-name"></div>
+    <div id="profile-big-email" class="muted"></div>
+    <div class="modal-actions col">
+      <button id="logout-bmrng" class="btn-ghost">Выйти из аккаунта</button>
+      <button id="profile-close" class="link">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>
