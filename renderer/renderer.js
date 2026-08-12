@@ -237,11 +237,12 @@ async function doAppleLogin() {
   log(`Вход в Apple ID ${email}…`);
   const r = await api.accountLogin(code ? { email, password, code } : { email, password });
   $("#ai-login").disabled = false;
+  if (r.raw) log("  ipatool: " + r.raw);
   if (r.ok) { $("#appleid-modal").hidden = true; log("✓ Вход выполнен"); refreshAccount(); return; }
   if (r.needCode) {
     $("#ai-code").hidden = false; setTimeout(() => $("#ai-code").focus(), 50);
-    $("#ai-error").textContent = "Введите код 2FA — он появился на ваших устройствах Apple";
-    log("Требуется код двухфакторной аутентификации");
+    $("#ai-error").textContent = "Код отправлен на ваши устройства Apple — введите его сюда";
+    log("Требуется код 2FA — показываю поле");
     return;
   }
   $("#ai-error").textContent = r.error || "Не удалось войти";

@@ -110,15 +110,20 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   if (code) args.push("--auth-code", code);
   const r = await run(tool, ipa(args));
   const low = r.out.toLowerCase();
-  const j = lastJSON(r.out) || {};
-  if (r.code === 0 || j.success) return { ok: true };
-  if (low.includes("code is required") || low.includes("2fa") || low.includes("two-factor") ||
-      low.includes("auth-code") || low.includes("authentication code") ||
-      low.includes("configurator_message"))
-    return { ok: false, needCode: true };
-  // отдаём реальный текст ошибки ipatool (или ошибку запуска), чтобы было видно причину
-  const raw = (j.error || r.out || "").toString().trim().replace(/\s+/g, " ").slice(-320);
-  return { ok: false, error: raw || `Не удалось войти (ipatool: ${tool})` };
+  const raw = (r.out || "").toString().trim().replace(/\s+/g, " ").slice(-360);
+
+  // достоверная проверка: реально ли вошли (сессия в keyring)
+  const info = await run(tool, ipa(["auth", "info", "--format", "json", "--non-interactive"]));
+  const ij = lastJSON(info.out) || {};
+  if (ij.success && (ij.name || ij.email)) return { ok: true, raw };
+
+  // не вошли — нужен ли 2FA-код?
+  const needs = low.includes("code") || low.includes("2fa") || low.includes("two-factor") ||
+                low.includes("verification") || low.includes("configurator") || low.includes("otp");
+  if (!code && needs) return { ok: false, needCode: true, raw };
+
+  const err = (lastJSON(r.out) || {}).error || raw || "Не удалось войти";
+  return { ok: false, error: err, raw };
 });
 
 ipcMain.handle("account-logout", async () => { await run(ipatoolPath(), ipa(["auth", "revoke"])); return true; });
