@@ -47,15 +47,22 @@ async function downloadRetry(url, dest, tries = 5) {
   console.log("↓ ipatool", ARCH, "…");
   await downloadRetry(URL, tgz);
   execSync(`tar -xzf "${tgz}" -C "${VENDOR}"`);
-  // распакуется ipatool-*-windows-*/ipatool.exe — вытащим наверх
-  for (const d of fs.readdirSync(VENDOR)) {
-    const p = path.join(VENDOR, d);
-    if (fs.statSync(p).isDirectory()) {
-      const exe = path.join(p, "ipatool.exe");
-      if (fs.existsSync(exe)) { fs.copyFileSync(exe, path.join(VENDOR, "ipatool.exe")); }
-    }
-  }
   fs.unlinkSync(tgz);
-  console.log("✓ vendor/ipatool.exe готов");
+  // архив содержит bin/ipatool-<ver>-windows-<arch>.exe — найдём его рекурсивно
+  function findExe(dir) {
+    for (const e of fs.readdirSync(dir)) {
+      const p = path.join(dir, e);
+      const st = fs.statSync(p);
+      if (st.isDirectory()) { const f = findExe(p); if (f) return f; }
+      else if (/ipatool.*\.exe$/i.test(e)) return p;
+    }
+    return null;
+  }
+  const found = findExe(VENDOR);
+  if (!found) throw new Error("ipatool.exe не найден после распаковки");
+  fs.copyFileSync(found, path.join(VENDOR, "ipatool.exe"));
+  // убрать распакованную папку bin (дубликат)
+  try { fs.rmSync(path.join(VENDOR, "bin"), { recursive: true, force: true }); } catch {}
+  console.log("✓ vendor/ipatool.exe готов (из", path.basename(found) + ")");
   console.log("Далее: положите Windows-Python с pymobiledevice3 в vendor/python/ (см. README).");
 })();
