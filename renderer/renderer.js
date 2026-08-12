@@ -212,23 +212,40 @@ function wireMain() {
     $("#profile-modal").hidden = false;
   };
   $("#profile-close").onclick = () => ($("#profile-modal").hidden = true);
+  $("#ai-close").onclick = () => ($("#appleid-modal").hidden = true);
+  $("#ai-login").onclick = doAppleLogin;
+  $("#ai-pass").onkeydown = (e) => { if (e.key === "Enter") doAppleLogin(); };
+  $("#ai-code").onkeydown = (e) => { if (e.key === "Enter") doAppleLogin(); };
   $("#logout-bmrng").onclick = async () => {
     await api.configSet({ registered: false, token: "" });
     location.reload();
   };
 }
 
-async function loginAppleId() {
-  const email = prompt("Apple ID (email):"); if (!email) return;
-  const password = prompt("Пароль Apple ID:"); if (!password) return;
+function loginAppleId() {
+  $("#ai-email").value = ""; $("#ai-pass").value = ""; $("#ai-code").value = "";
+  $("#ai-code").hidden = true; $("#ai-error").textContent = "";
+  $("#appleid-modal").hidden = false;
+  setTimeout(() => $("#ai-email").focus(), 50);
+}
+async function doAppleLogin() {
+  const email = $("#ai-email").value.trim();
+  const password = $("#ai-pass").value;
+  const code = $("#ai-code").value.trim();
+  if (!email || !password) { $("#ai-error").textContent = "Введите Apple ID и пароль"; return; }
+  $("#ai-login").disabled = true; $("#ai-error").textContent = "Вход…";
   log(`Вход в Apple ID ${email}…`);
-  let r = await api.accountLogin({ email, password });
+  const r = await api.accountLogin(code ? { email, password, code } : { email, password });
+  $("#ai-login").disabled = false;
+  if (r.ok) { $("#appleid-modal").hidden = true; log("✓ Вход выполнен"); refreshAccount(); return; }
   if (r.needCode) {
-    const code = prompt("Код двухфакторной аутентификации (6 цифр):"); if (!code) return;
-    r = await api.accountLogin({ email, password, code });
+    $("#ai-code").hidden = false; setTimeout(() => $("#ai-code").focus(), 50);
+    $("#ai-error").textContent = "Введите код 2FA — он появился на ваших устройствах Apple";
+    log("Требуется код двухфакторной аутентификации");
+    return;
   }
-  if (r.ok) { log("✓ Вход выполнен"); refreshAccount(); }
-  else { log("✗ " + (r.error || "не удалось войти")); alert(r.error || "Не удалось войти"); }
+  $("#ai-error").textContent = r.error || "Не удалось войти";
+  log("✗ " + (r.error || "не удалось войти"));
 }
 
 async function checkOwned() {

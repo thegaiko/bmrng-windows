@@ -60,7 +60,8 @@ function cfgSet(patch) { const c = { ...cfgGet(), ...patch }; fs.writeFileSync(c
 
 // ── каталог ─────────────────────────────────────────────────────
 function catalog() {
-  const p = path.join(resDir(), "apps.json");
+  // apps.json упакован в app.asar → читаем от __dirname, не из resourcesPath
+  const p = path.join(__dirname, "apps.json");
   try {
     const apps = JSON.parse(fs.readFileSync(p, "utf8")).apps || [];
     return apps.map((a) => ({

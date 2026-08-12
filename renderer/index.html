@@ -86,6 +86,19 @@
   </div>
 </div>
 
+<!-- модалка входа в Apple ID -->
+<div id="appleid-modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b> Вход в Apple ID</b><button id="ai-close" class="link">Отмена</button></div>
+    <p class="muted">Данные уходят напрямую в Apple и нигде не сохраняются. Нужен тот аккаунт, где приложение было в загрузках.</p>
+    <input id="ai-email" class="input" placeholder="Apple ID (email)">
+    <input id="ai-pass" class="input" type="password" placeholder="Пароль">
+    <input id="ai-code" class="input" type="text" placeholder="Код двухфакторной аутентификации" hidden>
+    <div id="ai-error" class="muted" style="color:var(--danger);min-height:16px"></div>
+    <div class="modal-actions"><button id="ai-login" class="btn-primary">Войти</button></div>
+  </div>
+</div>
+
 <!-- модалка профиля -->
 <div id="profile-modal" class="modal" hidden>
   <div class="modal-card center">
