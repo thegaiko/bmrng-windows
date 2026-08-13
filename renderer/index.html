@@ -113,6 +113,7 @@
     <div id="tu-promo-msg" class="muted"></div>
     <div id="tu-price" class="tu-price">Итого: —</div>
     <div id="tu-error" class="muted" style="color:var(--danger);min-height:16px"></div>
+    <div id="tu-manual-note" class="muted" hidden style="background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:10px 12px">Онлайн-оплата скоро подключится. Пока оформим вручную — напишите нам в Telegram, и мы пополним баланс.</div>
     <div class="modal-actions"><button id="tu-pay" class="btn-primary" disabled>Оформить</button></div>
   </div>
 </div>
@@ -139,6 +140,23 @@
     <div class="modal-actions col">
       <button id="logout-bmrng" class="btn-ghost">Выйти из аккаунта</button>
       <button id="profile-close" class="link">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div id="update-modal" class="modal" hidden>
+  <div class="modal-card center">
+    <div class="upd-badge">↑</div>
+    <b id="upd-title" style="font-size:18px">Доступно обновление</b>
+    <div id="upd-ver" class="muted"></div>
+    <div id="upd-notes" class="upd-notes"></div>
+    <div id="upd-progress" class="progress" hidden>
+      <div class="bar"><div id="upd-fill" class="fill"></div></div>
+      <div id="upd-progress-text" class="progress-text">Загрузка…</div>
+    </div>
+    <div class="modal-actions col">
+      <button id="upd-apply" class="btn-primary">Обновить и перезапустить</button>
+      <button id="upd-later" class="link">Позже</button>
     </div>
   </div>
 </div>

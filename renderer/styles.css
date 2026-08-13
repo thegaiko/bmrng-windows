@@ -18,6 +18,12 @@ button{font-family:inherit;cursor:pointer}
 .link{background:none;border:none;color:var(--accent);font-weight:600;font-size:13px}
 .input{width:100%;padding:11px 13px;font-size:15px;font-family:inherit;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:10px;outline:none}
 .input:focus{border-color:var(--accent)}
+/* поле пароля с «глазиком» */
+.pw-wrap{position:relative;width:100%}
+.pw-wrap .input{padding-right:42px}
+.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;padding:6px;cursor:pointer;color:var(--faint);display:flex;align-items:center;justify-content:center;border-radius:8px}
+.pw-eye:hover{color:var(--dim);background:var(--chip)}
+.pw-eye svg{width:20px;height:20px;display:block}
 
 /* ── онбординг ── */
 .onb{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;background:linear-gradient(180deg,var(--bg),var(--bg2))}
@@ -118,3 +124,9 @@ button{font-family:inherit;cursor:pointer}
 .modal-actions{display:flex;justify-content:flex-end;gap:10px}.modal-actions.col{flex-direction:column;width:100%}
 .big-ava{width:76px;height:76px;border-radius:99px;background:var(--accent);color:var(--on-accent);display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700}
 .big-name{font-size:19px;font-weight:700}
+
+/* обновление */
+.upd-badge{width:64px;height:64px;border-radius:99px;background:rgba(0,90,255,.1);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:800}
+.upd-notes{font-size:13.5px;color:var(--dim);line-height:1.5;background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;text-align:left;white-space:pre-wrap;max-height:140px;overflow:auto}
+.upd-notes:empty{display:none}
+#update-modal .progress{width:100%;margin:2px 0 0}

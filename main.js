@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -251,12 +251,126 @@ ipcMain.handle("bmrng-me", async () => apiAuth("/api/me/", "GET"));
 ipcMain.handle("bmrng-consume", async () => apiAuth("/api/consume/", "POST", {}));
 ipcMain.handle("bmrng-topup", async (_e, b) => apiAuth("/api/topup/", "POST", b));
 ipcMain.handle("bmrng-promo", async (_e, b) => apiAuth("/api/promo/validate/", "POST", b));
+ipcMain.handle("open-external", async (_e, url) => { try { await shell.openExternal(url); return true; } catch { return false; } });
 ipcMain.handle("config-get", async () => cfgGet());
 ipcMain.handle("config-set", async (_e, patch) => cfgSet(patch));
 ipcMain.handle("tools-ready", async () => ({
   ipatool: fs.existsSync(ipatoolPath()) || !ipatoolPath().includes("/"),
   python: true,
 }));
+
+// ── обновления ──────────────────────────────────────────────────
+const UPDATE_URL = "https://bmrng.app/download/version.json";
+
+function cmpVersions(a, b) {
+  const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+
+ipcMain.handle("app-version", async () => app.getVersion());
+
+// режим оплаты (управляется с сервера через version.json → payments)
+ipcMain.handle("pay-config", async () => {
+  try {
+    const res = await fetch(UPDATE_URL, { cache: "no-store" });
+    if (!res.ok) return { mode: "yookassa" };
+    const d = await res.json();
+    return d.payments || { mode: "yookassa" };
+  } catch {
+    return { mode: "yookassa" };
+  }
+});
+
+ipcMain.handle("check-update", async () => {
+  try {
+    const res = await fetch(UPDATE_URL, { cache: "no-store" });
+    if (!res.ok) return { available: false };
+    const data = await res.json();
+    const cur = app.getVersion();
+    const latest = data.version;
+    const asset = data[isWin ? "win" : "mac"] || {};
+    if (latest && cmpVersions(latest, cur) > 0 && asset.url) {
+      return {
+        available: true, version: latest, current: cur,
+        notes: data.notes || "", url: asset.url,
+        type: asset.type || (isWin ? "nsis" : "zip"),
+      };
+    }
+    return { available: false, current: cur, version: latest };
+  } catch (e) {
+    return { available: false, error: String(e) };
+  }
+});
+
+async function downloadFile(url, dest, onProgress) {
+  const res = await fetch(url, { redirect: "follow", cache: "no-store" });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const total = Number(res.headers.get("content-length") || 0);
+  const file = fs.createWriteStream(dest);
+  const reader = res.body.getReader();
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.length;
+    file.write(Buffer.from(value));
+    if (onProgress) onProgress(total ? received / total : 0, received, total);
+  }
+  await new Promise((r) => file.end(r));
+}
+
+// bash-скрипт, который ждёт закрытия приложения, подменяет .app и перезапускает
+function macUpdaterScript() {
+  return [
+    "#!/bin/bash",
+    'APP_BUNDLE="$1"; ZIP="$2"',
+    'for i in $(seq 1 120); do pgrep -f "$APP_BUNDLE/Contents/MacOS/" >/dev/null 2>&1 || break; sleep 0.5; done',
+    "sleep 0.5",
+    'TMP="$(mktemp -d)"',
+    'ditto -x -k "$ZIP" "$TMP"',
+    'NEW="$(/usr/bin/find "$TMP" -maxdepth 1 -name "*.app" | head -1)"',
+    'if [ -d "$NEW" ]; then',
+    '  rm -rf "$APP_BUNDLE"',
+    '  ditto "$NEW" "$APP_BUNDLE"',
+    '  xattr -dr com.apple.quarantine "$APP_BUNDLE" 2>/dev/null',
+    '  open "$APP_BUNDLE"',
+    "fi",
+    'rm -rf "$TMP" "$ZIP"',
+  ].join("\n");
+}
+
+ipcMain.handle("apply-update", async (_e, info) => {
+  const win = BrowserWindow.getAllWindows()[0];
+  const send = (p) => { try { win && win.webContents.send("update-progress", p); } catch {} };
+  try {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bmrng-upd-"));
+    if (isWin) {
+      const exe = path.join(tmpDir, "bmrng-setup.exe");
+      await downloadFile(info.url, exe, (f) => send({ phase: "download", frac: f }));
+      send({ phase: "install" });
+      spawn(exe, [], { detached: true, stdio: "ignore" }).unref();
+      setTimeout(() => app.quit(), 800);
+      return { ok: true };
+    } else {
+      const zip = path.join(tmpDir, "update.zip");
+      await downloadFile(info.url, zip, (f) => send({ phase: "download", frac: f }));
+      send({ phase: "install" });
+      const appBundle = path.resolve(process.execPath, "..", "..", ".."); // …/bmrng.app
+      const script = path.join(tmpDir, "apply.sh");
+      fs.writeFileSync(script, macUpdaterScript(), { mode: 0o755 });
+      spawn("/bin/bash", [script, appBundle, zip], { detached: true, stdio: "ignore" }).unref();
+      setTimeout(() => app.quit(), 500);
+      return { ok: true };
+    }
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+});
 
 // ── окно ────────────────────────────────────────────────────────
 function createWindow() {

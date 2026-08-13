@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld("bmrng", {
   consume: () => ipcRenderer.invoke("bmrng-consume"),
   topup: (b) => ipcRenderer.invoke("bmrng-topup", b),
   promoValidate: (b) => ipcRenderer.invoke("bmrng-promo", b),
+  openExternal: (url) => ipcRenderer.invoke("open-external", url),
+  appVersion: () => ipcRenderer.invoke("app-version"),
+  payConfig: () => ipcRenderer.invoke("pay-config"),
+  checkUpdate: () => ipcRenderer.invoke("check-update"),
+  applyUpdate: (info) => ipcRenderer.invoke("apply-update", info),
+  onUpdateProgress: (cb) => ipcRenderer.on("update-progress", (_e, p) => cb(p)),
   configGet: () => ipcRenderer.invoke("config-get"),
   configSet: (p) => ipcRenderer.invoke("config-set", p),
 });

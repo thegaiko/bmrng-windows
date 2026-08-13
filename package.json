@@ -1,7 +1,7 @@
 {
   "name": "bmrng",
   "productName": "bmrng",
-  "version": "1.0.7",
+  "version": "1.0.11",
   "description": "Возвращаем приложения на iPhone — Windows-версия",
   "main": "main.js",
   "author": "bmrng",
@@ -9,7 +9,8 @@
     "start": "electron .",
     "fetch-tools": "node scripts/fetch-tools.js",
     "dist": "electron-builder --win --publish never",
-    "dist:portable": "electron-builder --win portable --publish never"
+    "dist:portable": "electron-builder --win portable --publish never",
+    "dist:mac": "electron-builder --mac --publish never"
   },
   "devDependencies": {
     "electron": "^31.7.7",
@@ -22,6 +23,7 @@
       "output": "release",
       "buildResources": "build"
     },
+    "afterPack": "build/afterPack.js",
     "files": [
       "main.js",
       "preload.js",
@@ -45,7 +47,27 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "perMachine": false,
+      "artifactName": "bmrng-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": "arm64"
+        },
+        {
+          "target": "zip",
+          "arch": "arm64"
+        }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "bmrng"
     }
   }
 }

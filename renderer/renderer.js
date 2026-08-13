@@ -1,9 +1,33 @@
 const $ = (s) => document.querySelector(s);
 const api = window.bmrng;
 
+// «глазик» показать/скрыть пароль
+const EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.4M6.6 6.6A13.3 13.3 0 0 0 2 11s3.5 7 10 7a9 9 0 0 0 3.4-.66M14 14.12A3 3 0 0 1 9.88 10M1 1l22 22"/></svg>';
+function attachEye(input) {
+  if (!input || input.dataset.eye) return;
+  input.dataset.eye = "1";
+  const wrap = document.createElement("div");
+  wrap.className = "pw-wrap";
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "pw-eye"; btn.tabIndex = -1;
+  btn.innerHTML = EYE; btn.title = "Показать пароль";
+  btn.onclick = () => {
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.innerHTML = show ? EYE_OFF : EYE;
+    btn.title = show ? "Скрыть пароль" : "Показать пароль";
+    input.focus();
+  };
+  wrap.appendChild(btn);
+}
+
 const state = {
   cfg: {}, apps: [], selected: new Set(), owned: {}, devices: [], device: null,
   account: null, customId: "", busy: false,
+  pay: { mode: "yookassa", contact: "https://t.me/metagaiko" },
   balance: 0, tuQty: 0, tuDiscount: 0, tuPromo: "",
   onb: { mode: "welcome", step: 0, name: "", email: "", password: "", code: "" },
 };
@@ -14,7 +38,49 @@ const PRICE = 150;
   state.cfg = await api.configGet();
   if (state.cfg.registered) showApp(); else renderOnboarding();
   api.onInstallProgress(onProgress);
+  checkForUpdate();
+  try { const pc = await api.payConfig(); if (pc && pc.mode) state.pay = pc; } catch {}
 })();
+
+// ══ ОБНОВЛЕНИЯ ══════════════════════════════════════════════════
+let updateInfo = null;
+async function checkForUpdate() {
+  try {
+    const r = await api.checkUpdate();
+    if (!r || !r.available) return;
+    updateInfo = r;
+    $("#upd-ver").textContent = `Версия ${r.version} · у вас ${r.current}`;
+    $("#upd-notes").textContent = r.notes || "";
+    $("#update-modal").hidden = false;
+    wireUpdate();
+  } catch (e) { /* тихо: обновление не критично */ }
+}
+let updateWired = false;
+function wireUpdate() {
+  if (updateWired) return; updateWired = true;
+  $("#upd-later").onclick = () => ($("#update-modal").hidden = true);
+  api.onUpdateProgress((p) => {
+    $("#upd-progress").hidden = false;
+    const fill = $("#upd-fill"), txt = $("#upd-progress-text");
+    if (p.phase === "download") {
+      const pct = Math.round((p.frac || 0) * 100);
+      fill.classList.remove("indeterminate"); fill.style.width = pct + "%";
+      txt.textContent = `Загрузка… ${pct}%`;
+    } else if (p.phase === "install") {
+      fill.classList.add("indeterminate"); txt.textContent = "Установка и перезапуск…";
+    }
+  });
+  $("#upd-apply").onclick = async () => {
+    $("#upd-apply").disabled = true; $("#upd-later").disabled = true;
+    $("#upd-progress").hidden = false;
+    const r = await api.applyUpdate(updateInfo);
+    if (r && !r.ok) {
+      $("#upd-progress-text").textContent = "Ошибка: " + (r.error || "не удалось обновить");
+      $("#upd-apply").disabled = false; $("#upd-later").disabled = false;
+    }
+    // при успехе приложение само закроется и перезапустится
+  };
+}
 
 function showApp() {
   $("#onboarding").hidden = true;
@@ -44,6 +110,9 @@ function openTopup() {
   $("#tu-error").textContent = "";
   document.querySelectorAll(".tu-opt").forEach((b) => b.classList.remove("on"));
   updateTuPrice();
+  const manual = state.pay && state.pay.mode === "manual";
+  $("#tu-manual-note").hidden = !manual;
+  $("#tu-pay").textContent = manual ? "Написать в Telegram" : "Оформить";
   $("#topup-modal").hidden = false;
 }
 function setTuQty(q, fromCustom) {
@@ -55,7 +124,8 @@ function setTuQty(q, fromCustom) {
 function updateTuPrice() {
   const q = state.tuQty;
   const el = $("#tu-price"), pay = $("#tu-pay");
-  if (!q || q < 1) { el.textContent = "Итого: —"; pay.disabled = true; return; }
+  const manual = state.pay && state.pay.mode === "manual";
+  if (!q || q < 1) { el.textContent = "Итого: —"; pay.disabled = manual ? false : true; return; }
   const full = PRICE * q;
   const total = Math.round(full * (100 - state.tuDiscount) / 100);
   el.innerHTML = state.tuDiscount
@@ -79,17 +149,36 @@ async function applyPromo() {
   updateTuPrice();
 }
 async function submitTopup() {
+  // временный режим: онлайн-оплата отключена → открываем Telegram
+  if (state.pay && state.pay.mode === "manual") {
+    api.openExternal(state.pay.contact || "https://t.me/metagaiko");
+    $("#topup-modal").hidden = true;
+    return;
+  }
   if (!state.tuQty) return;
   $("#tu-pay").disabled = true; $("#tu-error").textContent = "";
   const r = await api.topup({ quantity: state.tuQty, code: state.tuPromo || undefined });
   $("#tu-pay").disabled = false;
-  if (r.status === 201) {
+  if (r.status === 201 && r.data.confirmation_url) {
     $("#topup-modal").hidden = true;
-    alert(`Заказ №${r.data.order_id} создан: ${r.data.quantity} установок за ${r.data.total_price} ₽.\nОплата подключится позже — тогда баланс пополнится.`);
-    log(`Создан заказ пополнения №${r.data.order_id}: ${r.data.quantity} × установка = ${r.data.total_price} ₽`);
+    log(`Заказ №${r.data.order_id}: ${r.data.quantity} установок за ${r.data.total_price} ₽ — открываю оплату в браузере…`);
+    api.openExternal(r.data.confirmation_url);
+    pollBalanceAfterPayment();
+  } else if (r.status === 201 && (r.data.free || r.data.status === "paid")) {
+    // 100% промокод — оплата не нужна, баланс уже начислен
+    $("#topup-modal").hidden = true;
+    log(`Промокод −100%: начислено ${r.data.quantity} установок бесплатно.`);
+    refreshBalance();
+  } else if (r.status === 201) {
+    $("#tu-error").textContent = "Платёж создан, но ссылка на оплату не получена";
   } else {
     $("#tu-error").textContent = r.data.detail || "Не удалось оформить";
   }
+}
+// После оплаты вебхук начислит баланс на сервере — периодически обновляем.
+function pollBalanceAfterPayment() {
+  let ticks = 0;
+  const t = setInterval(() => { ticks++; refreshBalance(); if (ticks >= 24) clearInterval(t); }, 5000);
 }
 
 // ══ ОНБОРДИНГ ═══════════════════════════════════════════════════
@@ -117,6 +206,8 @@ function renderOnboarding() {
       <input class="input" id="f-email" placeholder="Почта" value="${o.email}">
       <input class="input" id="f-pass" type="password" placeholder="Пароль">
       <button class="btn-primary" id="o-do">Войти</button>`;
+    attachEye($("#f-pass"));
+    $("#f-pass").onkeydown = (e) => { if (e.key === "Enter") doLogin(); };
     $("#o-back").onclick = () => { o.mode = "welcome"; renderOnboarding(); };
     $("#o-do").onclick = doLogin;
     return;
@@ -137,6 +228,8 @@ function renderOnboarding() {
     <input class="input" id="f-val" type="${f.type}" placeholder="${f.ph}" value="${o[f.key]||""}">
     <button class="btn-primary" id="o-next">${o.step===4?"Подтвердить":o.step===3?"Создать аккаунт":"Далее"}</button>`;
   $("#f-val").focus();
+  if (f.type === "password") attachEye($("#f-val"));
+  if (o.step === 4) { $("#f-val").inputMode = "numeric"; $("#f-val").autocomplete = "one-time-code"; }
   $("#f-val").onkeydown = (e) => { if (e.key === "Enter") onbNext(); };
   $("#o-next").onclick = onbNext;
   $("#o-back").onclick = () => {
@@ -160,7 +253,8 @@ async function onbNext() {
     return err(firstErr(r.data));
   }
   if (o.step === 4) {
-    if (!val) return err("Введите код"); o.code = val; setBusy(true);
+    const codeVal = val.replace(/\D/g, "");           // только цифры — убирает пробелы/вставленный мусор
+    if (!codeVal) return err("Введите код"); o.code = codeVal; setBusy(true);
     const r = await api.verify({ email: o.email, code: o.code });
     setBusy(false);
     if (r.status === 200) return finishAuth(r.data);
@@ -286,6 +380,7 @@ function wireMain() {
   $("#tu-pay").onclick = submitTopup;
   $("#ai-close").onclick = () => ($("#appleid-modal").hidden = true);
   $("#ai-login").onclick = doAppleLogin;
+  attachEye($("#ai-pass"));
   $("#ai-pass").onkeydown = (e) => { if (e.key === "Enter") doAppleLogin(); };
   $("#ai-code").onkeydown = (e) => { if (e.key === "Enter") doAppleLogin(); };
   $("#logout-bmrng").onclick = async () => {
