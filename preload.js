@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld("bmrng", {
   register: (b) => ipcRenderer.invoke("bmrng-register", b),
   verify: (b) => ipcRenderer.invoke("bmrng-verify", b),
   login: (b) => ipcRenderer.invoke("bmrng-login", b),
+  me: () => ipcRenderer.invoke("bmrng-me"),
+  consume: () => ipcRenderer.invoke("bmrng-consume"),
+  topup: (b) => ipcRenderer.invoke("bmrng-topup", b),
+  promoValidate: (b) => ipcRenderer.invoke("bmrng-promo", b),
   configGet: () => ipcRenderer.invoke("config-get"),
   configSet: (p) => ipcRenderer.invoke("config-set", p),
 });

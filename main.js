@@ -233,9 +233,24 @@ async function apiPost(pathname, body) {
     return { status: res.status, data };
   } catch (e) { return { status: 0, data: { detail: "Ошибка сети" } }; }
 }
+async function apiAuth(pathname, method, body) {
+  const token = cfgGet().token;
+  try {
+    const res = await fetch(API + pathname, {
+      method,
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Token " + token } : {}) },
+      body: method === "GET" ? undefined : JSON.stringify(body || {}),
+    });
+    return { status: res.status, data: await res.json().catch(() => ({})) };
+  } catch (e) { return { status: 0, data: { detail: "Ошибка сети" } }; }
+}
 ipcMain.handle("bmrng-register", async (_e, b) => apiPost("/api/register/", b));
 ipcMain.handle("bmrng-verify", async (_e, b) => apiPost("/api/verify-email/", b));
 ipcMain.handle("bmrng-login", async (_e, b) => apiPost("/api/login/", b));
+ipcMain.handle("bmrng-me", async () => apiAuth("/api/me/", "GET"));
+ipcMain.handle("bmrng-consume", async () => apiAuth("/api/consume/", "POST", {}));
+ipcMain.handle("bmrng-topup", async (_e, b) => apiAuth("/api/topup/", "POST", b));
+ipcMain.handle("bmrng-promo", async (_e, b) => apiAuth("/api/promo/validate/", "POST", b));
 ipcMain.handle("config-get", async () => cfgGet());
 ipcMain.handle("config-set", async (_e, patch) => cfgSet(patch));
 ipcMain.handle("tools-ready", async () => ({

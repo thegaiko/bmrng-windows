@@ -24,6 +24,10 @@
   <header class="hd">
     <div class="brand"><img src="../assets/icon.png" class="brand-ico"><span class="u">bmrng</span></div>
     <div class="hd-right">
+      <div class="balance-chip" title="Осталось установок">
+        <span class="bolt">⚡</span><b id="balance-n">—</b><span class="bl-label">установок</span>
+        <button id="topup" class="topup-plus" title="Пополнить">＋</button>
+      </div>
       <button id="btn-log" class="icon-btn" title="Журнал">☰</button>
       <button id="profile" class="profile-chip"><span id="profile-ava" class="ava">b</span><span id="profile-name">Профиль</span></button>
     </div>
@@ -87,6 +91,29 @@
     <div class="code-example">https://apps.apple.com/app/<b>id1634422317</b></div>
     <input id="id-input" class="input" placeholder="Ссылка или ID">
     <div class="modal-actions"><button id="id-install" class="btn-primary">Установить</button></div>
+  </div>
+</div>
+
+<!-- модалка пополнения баланса -->
+<div id="topup-modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b>Пополнить баланс установок</b><button id="tu-close" class="link">Закрыть</button></div>
+    <p class="muted">150 ₽ за 1 установку. Выберите количество:</p>
+    <div class="tu-options">
+      <button class="tu-opt" data-q="3">3</button>
+      <button class="tu-opt" data-q="5">5</button>
+      <button class="tu-opt" data-q="10">10</button>
+      <button class="tu-opt" data-q="20">20</button>
+    </div>
+    <input id="tu-custom" class="input" type="number" min="1" placeholder="Своё количество">
+    <div class="tu-promo-row">
+      <input id="tu-promo" class="input" placeholder="Промокод (если есть)">
+      <button id="tu-promo-apply" class="btn-ghost">Применить</button>
+    </div>
+    <div id="tu-promo-msg" class="muted"></div>
+    <div id="tu-price" class="tu-price">Итого: —</div>
+    <div id="tu-error" class="muted" style="color:var(--danger);min-height:16px"></div>
+    <div class="modal-actions"><button id="tu-pay" class="btn-primary" disabled>Оформить</button></div>
   </div>
 </div>
 

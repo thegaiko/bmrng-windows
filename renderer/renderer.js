@@ -4,8 +4,10 @@ const api = window.bmrng;
 const state = {
   cfg: {}, apps: [], selected: new Set(), owned: {}, devices: [], device: null,
   account: null, customId: "", busy: false,
+  balance: 0, tuQty: 0, tuDiscount: 0, tuPromo: "",
   onb: { mode: "welcome", step: 0, name: "", email: "", password: "", code: "" },
 };
+const PRICE = 150;
 
 // ══ ИНИЦИАЛИЗАЦИЯ ═══════════════════════════════════════════════
 (async function init() {
@@ -22,8 +24,72 @@ function showApp() {
   loadCatalog();
   refreshAccount();
   refreshDevices();
+  refreshBalance();
   setInterval(() => { if (!state.busy) refreshDevices(); }, 3000);
   wireMain();
+}
+
+async function refreshBalance() {
+  const r = await api.me();
+  if (r.status === 200 && r.data) {
+    state.balance = r.data.install_balance ?? 0;
+    $("#balance-n").textContent = state.balance;
+  }
+}
+
+// ── пополнение ──────────────────────────────────────────────────
+function openTopup() {
+  state.tuQty = 0; state.tuDiscount = 0; state.tuPromo = "";
+  $("#tu-custom").value = ""; $("#tu-promo").value = ""; $("#tu-promo-msg").textContent = "";
+  $("#tu-error").textContent = "";
+  document.querySelectorAll(".tu-opt").forEach((b) => b.classList.remove("on"));
+  updateTuPrice();
+  $("#topup-modal").hidden = false;
+}
+function setTuQty(q, fromCustom) {
+  state.tuQty = q;
+  document.querySelectorAll(".tu-opt").forEach((b) => b.classList.toggle("on", !fromCustom && Number(b.dataset.q) === q));
+  if (!fromCustom) $("#tu-custom").value = "";
+  updateTuPrice();
+}
+function updateTuPrice() {
+  const q = state.tuQty;
+  const el = $("#tu-price"), pay = $("#tu-pay");
+  if (!q || q < 1) { el.textContent = "Итого: —"; pay.disabled = true; return; }
+  const full = PRICE * q;
+  const total = Math.round(full * (100 - state.tuDiscount) / 100);
+  el.innerHTML = state.tuDiscount
+    ? `Итого: <s>${full} ₽</s> ${total} ₽`
+    : `Итого: ${total} ₽`;
+  pay.disabled = false;
+}
+async function applyPromo() {
+  const code = $("#tu-promo").value.trim();
+  if (!code) { state.tuDiscount = 0; state.tuPromo = ""; $("#tu-promo-msg").textContent = ""; updateTuPrice(); return; }
+  const r = await api.promoValidate({ code });
+  if (r.status === 200) {
+    state.tuDiscount = r.data.discount_percent; state.tuPromo = r.data.code;
+    $("#tu-promo-msg").style.color = "var(--good)";
+    $("#tu-promo-msg").textContent = `Промокод применён: −${r.data.discount_percent}%`;
+  } else {
+    state.tuDiscount = 0; state.tuPromo = "";
+    $("#tu-promo-msg").style.color = "var(--danger)";
+    $("#tu-promo-msg").textContent = r.data.detail || "Промокод недоступен";
+  }
+  updateTuPrice();
+}
+async function submitTopup() {
+  if (!state.tuQty) return;
+  $("#tu-pay").disabled = true; $("#tu-error").textContent = "";
+  const r = await api.topup({ quantity: state.tuQty, code: state.tuPromo || undefined });
+  $("#tu-pay").disabled = false;
+  if (r.status === 201) {
+    $("#topup-modal").hidden = true;
+    alert(`Заказ №${r.data.order_id} создан: ${r.data.quantity} установок за ${r.data.total_price} ₽.\nОплата подключится позже — тогда баланс пополнится.`);
+    log(`Создан заказ пополнения №${r.data.order_id}: ${r.data.quantity} × установка = ${r.data.total_price} ₽`);
+  } else {
+    $("#tu-error").textContent = r.data.detail || "Не удалось оформить";
+  }
 }
 
 // ══ ОНБОРДИНГ ═══════════════════════════════════════════════════
@@ -212,6 +278,12 @@ function wireMain() {
     $("#profile-modal").hidden = false;
   };
   $("#profile-close").onclick = () => ($("#profile-modal").hidden = true);
+  $("#topup").onclick = openTopup;
+  $("#tu-close").onclick = () => ($("#topup-modal").hidden = true);
+  document.querySelectorAll(".tu-opt").forEach((b) => (b.onclick = () => setTuQty(Number(b.dataset.q), false)));
+  $("#tu-custom").oninput = () => setTuQty(Number($("#tu-custom").value) || 0, true);
+  $("#tu-promo-apply").onclick = applyPromo;
+  $("#tu-pay").onclick = submitTopup;
   $("#ai-close").onclick = () => ($("#appleid-modal").hidden = true);
   $("#ai-login").onclick = doAppleLogin;
   $("#ai-pass").onkeydown = (e) => { if (e.key === "Enter") doAppleLogin(); };
@@ -263,14 +335,21 @@ async function installList(list) {
   if (!state.device) return alert("Подключите iPhone");
   if (!state.account) return alert("Войдите в Apple ID");
   if (!list.length) return;
+  await refreshBalance();
+  if (state.balance <= 0) { openTopup(); alert("Закончились установки — пополните баланс."); return; }
   setBusyMain(true);
   showProgress(true); setBar(null, "Подготовка…");
   log(`\n── Установка ${list.length} приложени(й) на ${state.device.name} ──`);
   let done = 0;
   for (let i = 0; i < list.length; i++) {
+    if (state.balance <= 0) { log("✗ Закончились установки"); setBusyMain(false); openTopup(); break; }
     log(`\n[${i + 1}/${list.length}] ${list[i].name}`);
     const r = await api.install({ app: list[i], udid: state.device.udid });
-    if (r.ok) done++;
+    if (r.ok) {
+      done++;
+      const c = await api.consume();
+      if (c.status === 200) { state.balance = c.data.balance; $("#balance-n").textContent = state.balance; }
+    }
   }
   log(`\nГотово: ${done} из ${list.length} установлено.`);
   $("#phone-screen").innerHTML = done ? "<div>✓<br>Готово</div>" : "<div>✗<br>Ошибка</div>";

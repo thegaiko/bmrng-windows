@@ -44,6 +44,19 @@ button{font-family:inherit;cursor:pointer}
 .icon-btn{background:var(--card);border:1px solid var(--line);border-radius:99px;width:38px;height:38px;font-size:15px;color:var(--dim)}
 .profile-chip{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:99px;padding:6px 12px 6px 6px;font-weight:600;font-size:14px}
 .ava{width:28px;height:28px;border-radius:99px;background:var(--accent);color:var(--on-accent);display:flex;align-items:center;justify-content:center;font-weight:700}
+.balance-chip{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 6px 5px 12px;font-size:13px}
+.balance-chip .bolt{color:var(--accent)}
+.balance-chip b{font-size:15px}
+.balance-chip .bl-label{color:var(--dim);margin-right:2px}
+.topup-plus{width:26px;height:26px;border-radius:99px;background:var(--accent);color:var(--on-accent);border:none;font-size:16px;font-weight:700;line-height:1;display:flex;align-items:center;justify-content:center}
+.topup-plus:active{transform:scale(.92)}
+.tu-options{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tu-opt{padding:14px 0;border-radius:12px;border:1.5px solid var(--line);background:var(--card);font-weight:700;font-size:16px;transition:border-color .12s,background .12s}
+.tu-opt.on{border-color:var(--accent);background:rgba(0,90,255,.08);color:var(--accent)}
+.tu-promo-row{display:flex;gap:8px}
+.tu-promo-row .input{flex:1}
+.tu-price{font-size:20px;font-weight:700;text-align:center;padding:6px 0}
+.tu-price s{color:var(--faint);font-weight:500;font-size:15px;margin-right:8px}
 
 /* ── колонки ── */
 .cols{display:flex;height:calc(100vh - 70px - 74px)}
