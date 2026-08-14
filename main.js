@@ -175,11 +175,18 @@ ipcMain.handle("check-owned", async (_e, app) => {
 });
 
 // ── IPC: установка (с прогрессом) ───────────────────────────────
-ipcMain.handle("install", async (e, { app, udid }) => {
+ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
   const tool = ipatoolPath(); const py = pythonBase();
   const send = (m) => e.sender.send("install-progress", m);
   const ipaFile = path.join(os.tmpdir(), `${app.key}.ipa`);
   try { fs.unlinkSync(ipaFile); } catch {}
+
+  const sels = selectors(app);
+  const start = Math.max(0, fromIndex || 0);
+  if (start >= sels.length) {
+    send({ phase: "error", line: "✗ Больше версий нет" });
+    return { ok: false, error: "Все доступные версии этого приложения уже перепробованы", exhausted: true, total: sels.length };
+  }
 
   send({ phase: "download", app: app.name, line: `Скачивание «${app.name}»…` });
   // поллинг размера скачиваемого файла → прогресс в МБ
@@ -188,18 +195,18 @@ ipcMain.handle("install", async (e, { app, udid }) => {
     for (const f of [ipaFile, ipaFile + ".tmp"]) { try { sz += fs.statSync(f).size; } catch {} }
     if (sz > 0) send({ phase: "download", app: app.name, bytes: sz });
   }, 400);
-  const sels = selectors(app); let ok = false; let lastOut = "";
-  for (let i = 0; i < sels.length; i++) {
+  let ok = false; let lastOut = ""; let usedIndex = -1;
+  for (let i = start; i < sels.length; i++) {
     const sel = sels[i];
     if (sels.length > 1) send({ line: `Вариант ${i + 1}/${sels.length}…` });
     let r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]));
     lastOut = r.out;
-    if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; break; }
+    if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; usedIndex = i; break; }
     if (r.out.toLowerCase().includes("license is required")) {
       send({ line: "Приобретаю лицензию…" });
       r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--purchase", "--format", "json", "--non-interactive"]));
       lastOut = r.out;
-      if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; break; }
+      if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; usedIndex = i; break; }
     }
     try { fs.unlinkSync(ipaFile); } catch {}
   }
@@ -207,7 +214,7 @@ ipcMain.handle("install", async (e, { app, udid }) => {
   if (!ok) {
     const err = (lastJSON(lastOut) || {}).error || (lastOut || "").toString().trim().replace(/\s+/g, " ").slice(-300) || "не удалось скачать";
     send({ phase: "error", line: `✗ ${err}` });
-    return { ok: false, error: err };
+    return { ok: false, error: err, total: sels.length, triedFrom: start };
   }
   send({ phase: "install", progress: 0, line: "Устанавливаю на iPhone…" });
   const ir = await run(py.cmd, [...py.pre, "apps", "install", ipaFile], {
@@ -218,9 +225,12 @@ ipcMain.handle("install", async (e, { app, udid }) => {
     },
   });
   try { fs.unlinkSync(ipaFile); } catch {}
-  if (ir.code === 0 || ir.out.includes("Installation succeed")) { send({ phase: "done", progress: 1, line: "✓ Установлено" }); return { ok: true }; }
+  if (ir.code === 0 || ir.out.includes("Installation succeed")) {
+    send({ phase: "done", progress: 1, line: "✓ Установлено" });
+    return { ok: true, usedIndex, total: sels.length };
+  }
   send({ phase: "error", line: "✗ ошибка установки" });
-  return { ok: false, error: "install failed" };
+  return { ok: false, error: "install failed", total: sels.length };
 });
 
 // ── IPC: аккаунт bmrng (тот же бэкенд) ──────────────────────────

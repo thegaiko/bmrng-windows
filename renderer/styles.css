@@ -102,6 +102,9 @@ button{font-family:inherit;cursor:pointer}
 .chip .nm{font-size:14px;font-weight:600;line-height:1.15}
 .chip .st{font-size:11px;font-weight:600;margin-top:2px}
 .st.owned{color:var(--good)} .st.notOwned{color:var(--danger)} .st.unavailable,.st.needID{color:var(--warn)}
+.retry-ver{margin-top:7px;width:100%;background:rgba(0,90,255,.09);color:var(--accent);border:1px solid var(--accent);border-radius:8px;font-weight:700;font-size:11px;padding:6px 6px;cursor:pointer;line-height:1.15;transition:background .12s}
+.retry-ver:hover{background:rgba(0,90,255,.18)}
+.retry-done{margin-top:7px;font-size:10.5px;color:var(--good);font-weight:600}
 .add-id{margin-top:10px;padding:11px;border-radius:12px;border:1.5px dashed var(--accent);background:rgba(0,90,255,.06);color:var(--accent-soft);font-weight:600;font-size:14px}
 
 .install-bar{padding:14px 20px;border-top:1px solid var(--line)}

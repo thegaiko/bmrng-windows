@@ -27,6 +27,7 @@ function attachEye(input) {
 const state = {
   cfg: {}, apps: [], selected: new Set(), owned: {}, devices: [], device: null,
   account: null, customId: "", busy: false,
+  installed: {}, // ключ приложения → { usedIndex, total, exhausted }
   pay: { mode: "yookassa", contact: "https://t.me/metagaiko" },
   balance: 0, tuQty: 0, tuDiscount: 0, tuPromo: "",
   onb: { mode: "welcome", step: 0, name: "", email: "", password: "", code: "" },
@@ -297,13 +298,48 @@ function renderApps() {
     const div = document.createElement("div");
     div.className = "chip" + (on ? " on" : "");
     const src = logoSrc(app);
+    const inst = state.installed[app.key];
+    let retryHtml = "";
+    if (inst) {
+      const hasMore = !inst.exhausted && inst.usedIndex + 1 < inst.total;
+      retryHtml = hasMore
+        ? `<button class="retry-ver" data-key="${app.key}">↻ Не работает? Другая версия</button>`
+        : `<div class="retry-done">Все версии перепробованы</div>`;
+    }
     div.innerHTML =
       (src ? `<img class="logo" src="${src}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'logo placeholder',textContent:'${app.name[0]}'}))">`
            : `<div class="logo placeholder">${app.name[0]}</div>`) +
-      `<div><div class="nm">${app.name}</div>${stLabel ? `<div class="st ${st}">${stLabel}</div>` : ""}</div>`;
+      `<div style="flex:1"><div class="nm">${app.name}</div>${stLabel ? `<div class="st ${st}">${stLabel}</div>` : ""}${retryHtml}</div>`;
     div.onclick = () => { on ? state.selected.delete(app.key) : state.selected.add(app.key); renderApps(); updateInstallBtn(); };
+    const rb = div.querySelector(".retry-ver");
+    if (rb) rb.onclick = (ev) => { ev.stopPropagation(); tryNextVersion(app); };
     grid.appendChild(div);
   }
+}
+
+// Попробовать следующий App Store ID того же приложения (бесплатно — это повтор той же установки).
+async function tryNextVersion(app) {
+  const info = state.installed[app.key];
+  if (!info || state.busy) return;
+  const next = info.usedIndex + 1;
+  if (next >= info.total) return;
+  if (!state.device) return alert("Подключите iPhone");
+  if (!state.account) return alert("Войдите в Apple ID");
+  setBusyMain(true); showProgress(true); setBar(null, "Другая версия…");
+  log(`\n↻ ${app.name}: пробую другую версию (вариант ${next + 1}/${info.total})…`);
+  const r = await api.install({ app, udid: state.device.udid, fromIndex: next });
+  if (r.ok) {
+    state.installed[app.key] = { usedIndex: r.usedIndex, total: r.total };
+    log(`✓ Установлена версия ${r.usedIndex + 1}/${r.total}. Проверьте — если снова не работает, жмите ещё раз.`);
+    setBar(1, `Готово: вариант ${r.usedIndex + 1}/${r.total}`);
+  } else {
+    if (r.exhausted) { state.installed[app.key].exhausted = true; log("✗ Больше версий для этого приложения нет."); }
+    else log(`✗ ${r.error || "не удалось установить эту версию"}`);
+    setBar(0, "Не удалось");
+  }
+  setBusyMain(false); renderApps(); updateInstallBtn();
+  setTimeout(() => showProgress(false), 3000);
+  setTimeout(refreshDevices, 2500);
 }
 function updateInstallBtn() {
   $("#install").disabled = state.busy || !state.account || !state.device || (state.selected.size === 0 && !state.customId);
@@ -442,6 +478,7 @@ async function installList(list) {
     const r = await api.install({ app: list[i], udid: state.device.udid });
     if (r.ok) {
       done++;
+      if ((r.total || 1) > 1) { state.installed[list[i].key] = { usedIndex: r.usedIndex, total: r.total }; renderApps(); }
       const c = await api.consume();
       if (c.status === 200) { state.balance = c.data.balance; $("#balance-n").textContent = state.balance; }
     }
