@@ -1,7 +1,7 @@
 {
   "name": "bmrng",
   "productName": "bmrng",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Возвращаем приложения на iPhone — Windows-версия",
   "main": "main.js",
   "author": "bmrng",
