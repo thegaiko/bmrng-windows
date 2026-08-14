@@ -287,7 +287,17 @@ async function loadCatalog() {
   state.apps = await api.catalog();
   renderApps();
 }
-function logoSrc(app) { return app.logo ? `../assets/logos/${app.logo}.png` : null; }
+function logoSrc(app) { return app.icon || (app.logo ? `../assets/logos/${app.logo}.png` : null); }
+function usedAppId(app, idx) { return (app.appIDs && idx >= 0 && app.appIDs[idx] != null) ? String(app.appIDs[idx]) : ""; }
+// зафиксировать установку в журнале на бэкенде (для админки: кто/когда/что/куда)
+function logInstall(app, usedIndex) {
+  try {
+    api.installLog({
+      app_key: app.key, app_name: app.name, app_id: usedAppId(app, usedIndex),
+      device_name: (state.device && state.device.name) || "", device_udid: (state.device && state.device.udid) || "",
+    });
+  } catch { /* журнал не критичен */ }
+}
 function renderApps() {
   const grid = $("#apps-grid");
   grid.innerHTML = "";
@@ -330,6 +340,7 @@ async function tryNextVersion(app) {
   const r = await api.install({ app, udid: state.device.udid, fromIndex: next });
   if (r.ok) {
     state.installed[app.key] = { usedIndex: r.usedIndex, total: r.total };
+    logInstall(app, r.usedIndex);
     log(`✓ Установлена версия ${r.usedIndex + 1}/${r.total}. Проверьте — если снова не работает, жмите ещё раз.`);
     setBar(1, `Готово: вариант ${r.usedIndex + 1}/${r.total}`);
   } else {
@@ -479,6 +490,7 @@ async function installList(list) {
     if (r.ok) {
       done++;
       if ((r.total || 1) > 1) { state.installed[list[i].key] = { usedIndex: r.usedIndex, total: r.total }; renderApps(); }
+      logInstall(list[i], r.usedIndex);
       const c = await api.consume();
       if (c.status === 200) { state.balance = c.data.balance; $("#balance-n").textContent = state.balance; }
     }

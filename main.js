@@ -35,17 +35,25 @@ function pythonBase() {
 }
 
 // ── запуск процессов ────────────────────────────────────────────
-function run(cmd, args, { env = {}, onData } = {}) {
+function run(cmd, args, { env = {}, onData, timeoutMs } = {}) {
   return new Promise((resolve) => {
     let child;
     try { child = spawn(cmd, args, { env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...env } }); }
     catch (e) { return resolve({ code: -1, out: String(e) }); }
-    let out = "";
+    // Закрываем stdin: если инструмент вдруг ждёт интерактивный ввод (2FA/пароль) —
+    // получит EOF и завершится с ошибкой, а не зависнет навсегда (частая причина «вход… и ничего»).
+    try { child.stdin.end(); } catch {}
+    let out = ""; let done = false; let timer = null;
+    const finish = (res) => { if (done) return; done = true; if (timer) clearTimeout(timer); resolve(res); };
     const cap = (d) => { const s = d.toString(); out += s; if (onData) onData(s); };
     child.stdout.on("data", cap);
     child.stderr.on("data", cap);
-    child.on("close", (code) => resolve({ code, out }));
-    child.on("error", (e) => resolve({ code: -1, out: String(e) }));
+    child.on("close", (code) => finish({ code, out }));
+    child.on("error", (e) => finish({ code: -1, out: String(e) }));
+    if (timeoutMs) timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      finish({ code: -1, out: out + "\n[timeout]", timedOut: true });
+    }, timeoutMs);
   });
 }
 function lastJSON(text) {
@@ -63,7 +71,7 @@ function cfgGet() { try { return JSON.parse(fs.readFileSync(cfgPath(), "utf8"));
 function cfgSet(patch) { const c = { ...cfgGet(), ...patch }; fs.writeFileSync(cfgPath(), JSON.stringify(c)); return c; }
 
 // ── каталог ─────────────────────────────────────────────────────
-function catalog() {
+function catalogFromLocal() {
   // apps.json упакован в app.asar → читаем от __dirname, не из resourcesPath
   const p = path.join(__dirname, "apps.json");
   try {
@@ -74,6 +82,23 @@ function catalog() {
       bundleID: a.bundle_id || null,
     }));
   } catch { return []; }
+}
+async function catalog() {
+  // основной источник — бэкенд (управляется в Django); фолбэк — вшитый apps.json
+  try {
+    const res = await fetch(API + "/api/catalog/", { cache: "no-store" });
+    if (res.ok) {
+      const apps = await res.json();
+      if (Array.isArray(apps) && apps.length) {
+        return apps.map((a) => ({
+          key: a.key, name: a.name, icon: a.icon || null,
+          appIDs: (a.app_ids || []).map(String),
+          bundleID: a.bundle_id || null,
+        }));
+      }
+    }
+  } catch { /* оффлайн — уходим в фолбэк */ }
+  return catalogFromLocal();
 }
 function selectors(app) {
   if (app.appIDs && app.appIDs.length) return app.appIDs.map((id) => ["-i", String(id)]);
@@ -108,12 +133,13 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   const tool = ipatoolPath();
   const args = ["auth", "login", "-e", email, "-p", password, "--format", "json", "--non-interactive"];
   if (code) args.push("--auth-code", code);
-  const r = await run(tool, ipa(args));
+  const r = await run(tool, ipa(args), { timeoutMs: 90000 });
   const low = r.out.toLowerCase();
   const raw = (r.out || "").toString().trim().replace(/\s+/g, " ").slice(-360);
+  if (r.timedOut) return { ok: false, error: "Превышено время ожидания входа. Проверьте интернет и попробуйте снова.", raw };
 
   // достоверная проверка: реально ли вошли (сессия в keyring)
-  const info = await run(tool, ipa(["auth", "info", "--format", "json", "--non-interactive"]));
+  const info = await run(tool, ipa(["auth", "info", "--format", "json", "--non-interactive"]), { timeoutMs: 30000 });
   const ij = lastJSON(info.out) || {};
   if (ij.success && (ij.name || ij.email)) return { ok: true, raw };
 
@@ -261,6 +287,7 @@ ipcMain.handle("bmrng-me", async () => apiAuth("/api/me/", "GET"));
 ipcMain.handle("bmrng-consume", async () => apiAuth("/api/consume/", "POST", {}));
 ipcMain.handle("bmrng-topup", async (_e, b) => apiAuth("/api/topup/", "POST", b));
 ipcMain.handle("bmrng-promo", async (_e, b) => apiAuth("/api/promo/validate/", "POST", b));
+ipcMain.handle("install-log", async (_e, b) => apiAuth("/api/install-log/", "POST", { ...b, platform: isWin ? "win" : "mac" }));
 ipcMain.handle("open-external", async (_e, url) => { try { await shell.openExternal(url); return true; } catch { return false; } });
 ipcMain.handle("config-get", async () => cfgGet());
 ipcMain.handle("config-set", async (_e, patch) => cfgSet(patch));
