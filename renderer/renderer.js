@@ -32,7 +32,7 @@ const state = {
   balance: 0, tuQty: 0, tuDiscount: 0, tuPromo: "",
   onb: { mode: "welcome", step: 0, name: "", email: "", password: "", code: "" },
 };
-const PRICE = 150;
+let PRICE = 50; // цена за установку по умолчанию; актуальную берём с бэкенда (/api/me/)
 
 // ══ ИНИЦИАЛИЗАЦИЯ ═══════════════════════════════════════════════
 (async function init() {
@@ -101,6 +101,7 @@ async function refreshBalance() {
   if (r.status === 200 && r.data) {
     state.balance = r.data.install_balance ?? 0;
     $("#balance-n").textContent = state.balance;
+    if (r.data.price_per_install) PRICE = r.data.price_per_install;
   }
 }
 
@@ -110,6 +111,8 @@ function openTopup() {
   $("#tu-custom").value = ""; $("#tu-promo").value = ""; $("#tu-promo-msg").textContent = "";
   $("#tu-error").textContent = "";
   document.querySelectorAll(".tu-opt").forEach((b) => b.classList.remove("on"));
+  const note = $("#tu-price-note");
+  if (note) note.textContent = `${PRICE} ₽ за 1 установку. Выберите количество:`;
   updateTuPrice();
   const manual = state.pay && state.pay.mode === "manual";
   $("#tu-manual-note").hidden = !manual;
