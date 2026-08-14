@@ -47,7 +47,10 @@ button{font-family:inherit;cursor:pointer}
 .brand{display:flex;align-items:center;gap:10px}.brand-ico{width:30px;height:30px;border-radius:8px}
 .brand .u{font-weight:900;font-size:19px}
 .hd-right{display:flex;align-items:center;gap:10px}
-.icon-btn{background:var(--card);border:1px solid var(--line);border-radius:99px;width:38px;height:38px;font-size:15px;color:var(--dim)}
+.icon-btn{background:var(--card);border:1px solid var(--line);border-radius:99px;width:38px;height:38px;font-size:15px;color:var(--dim);display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s}
+.icon-btn:hover{background:var(--chip);color:var(--accent)}
+.icon-btn svg{width:19px;height:19px}
+#btn-support{color:var(--accent)}
 .profile-chip{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:99px;padding:6px 12px 6px 6px;font-weight:600;font-size:14px}
 .ava{width:28px;height:28px;border-radius:99px;background:var(--accent);color:var(--on-accent);display:flex;align-items:center;justify-content:center;font-weight:700}
 .balance-chip{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 6px 5px 12px;font-size:13px}
@@ -56,6 +59,10 @@ button{font-family:inherit;cursor:pointer}
 .balance-chip .bl-label{color:var(--dim);margin-right:2px}
 .topup-plus{width:26px;height:26px;border-radius:99px;background:var(--accent);color:var(--on-accent);border:none;font-size:16px;font-weight:700;line-height:1;display:flex;align-items:center;justify-content:center}
 .topup-plus:active{transform:scale(.92)}
+.chip-btn{width:26px;height:26px;border-radius:99px;background:var(--chip);color:var(--dim);border:1px solid var(--line);font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,color .15s}
+.chip-btn:hover{background:var(--bg2);color:var(--ink)}
+.chip-btn.spin{animation:spin360 .6s ease}
+@keyframes spin360{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 .tu-options{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .tu-opt{padding:14px 0;border-radius:12px;border:1.5px solid var(--line);background:var(--card);font-weight:700;font-size:16px;transition:border-color .12s,background .12s}
 .tu-opt.on{border-color:var(--accent);background:rgba(0,90,255,.08);color:var(--accent)}
@@ -67,6 +74,11 @@ button{font-family:inherit;cursor:pointer}
 /* ── колонки ── */
 .cols{display:flex;height:calc(100vh - 70px - 74px)}
 .side{width:300px;padding:8px 20px;display:flex;flex-direction:column;align-items:center;gap:14px;overflow:auto}
+.side-foot{margin-top:auto;display:flex;align-items:center;gap:8px;padding-top:10px}
+.foot-btn{width:34px;height:34px;border-radius:10px;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--accent);transition:background .15s,transform .1s}
+.foot-btn:hover{background:var(--chip)} .foot-btn:active{transform:scale(.94)}
+.foot-btn img{width:22px;height:22px;border-radius:6px}
+.side-foot-label{font-size:12px;color:var(--faint);font-weight:600}
 .main{flex:1;padding:8px 20px 0;overflow:hidden;display:flex}
 
 /* телефон */
@@ -109,14 +121,17 @@ button{font-family:inherit;cursor:pointer}
 .retry-done{margin-top:7px;font-size:10.5px;color:var(--good);font-weight:600}
 .add-id{margin-top:10px;padding:11px;border-radius:12px;border:1.5px dashed var(--accent);background:rgba(0,90,255,.06);color:var(--accent-soft);font-weight:600;font-size:14px}
 
-.install-bar{padding:14px 20px;border-top:1px solid var(--line)}
+.install-bar{padding:12px 20px;border-top:1px solid var(--line)}
 .install-bar .btn-primary{width:100%}
-.progress{margin-bottom:12px}
+.progress-row{display:flex;align-items:center;gap:12px;margin-top:8px}
+.cancel-btn{flex:none;background:transparent;color:var(--danger);border:1.5px solid var(--danger);border-radius:10px;font-weight:700;font-size:13px;padding:6px 14px;cursor:pointer;white-space:nowrap;transition:background .15s}
+.cancel-btn:hover{background:rgba(218,59,64,.08)} .cancel-btn:disabled{opacity:.5;cursor:default}
+.progress{margin-bottom:8px}
 .bar{height:9px;background:var(--chip);border:1px solid var(--line);border-radius:99px;overflow:hidden;position:relative}
 .fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent-soft));border-radius:99px;transition:width .3s ease}
 .fill.indeterminate{width:35%;position:absolute;animation:indet 1.15s ease-in-out infinite}
 @keyframes indet{0%{left:-35%}100%{left:100%}}
-.progress-text{font-size:12.5px;color:var(--dim);margin-top:7px;text-align:center;font-weight:600}
+.progress-text{font-size:12.5px;color:var(--dim);font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* модалки */
 .modal{position:fixed;inset:0;background:rgba(8,14,29,.35);display:flex;align-items:center;justify-content:center;z-index:20}

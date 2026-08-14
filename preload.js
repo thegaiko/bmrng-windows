@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("bmrng", {
   promoValidate: (b) => ipcRenderer.invoke("bmrng-promo", b),
   installLog: (b) => ipcRenderer.invoke("install-log", b),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
+  cancelInstall: () => ipcRenderer.invoke("cancel-install"),
   appVersion: () => ipcRenderer.invoke("app-version"),
   payConfig: () => ipcRenderer.invoke("pay-config"),
   checkUpdate: () => ipcRenderer.invoke("check-update"),

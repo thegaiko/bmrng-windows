@@ -26,8 +26,12 @@
     <div class="hd-right">
       <div class="balance-chip" title="Осталось установок">
         <span class="bolt">⚡</span><b id="balance-n">—</b><span class="bl-label">установок</span>
+        <button id="refresh-balance" class="chip-btn" title="Обновить баланс">↻</button>
         <button id="topup" class="topup-plus" title="Пополнить">＋</button>
       </div>
+      <button id="btn-support" class="icon-btn" title="Поддержка в Telegram">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-3"/><rect x="1" y="13" width="4" height="7" rx="1.6"/><rect x="19" y="13" width="4" height="7" rx="1.6"/></svg>
+      </button>
       <button id="btn-log" class="icon-btn" title="Журнал">☰</button>
       <button id="profile" class="profile-chip"><span id="profile-ava" class="ava">b</span><span id="profile-name">Профиль</span></button>
     </div>
@@ -48,6 +52,16 @@
         <div class="ac-row"><span class="ac-label">APPLE ID</span><span id="ac-dot" class="dot off"></span></div>
         <div id="ac-name" class="ac-name">Не подключён</div>
         <div id="ac-actions" class="ac-actions"></div>
+      </div>
+
+      <div class="side-foot">
+        <button id="foot-site" class="foot-btn" title="bmrng.app">
+          <img src="../assets/icon.png" alt="bmrng">
+        </button>
+        <button id="foot-tg" class="foot-btn" title="Наш Telegram">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M21.94 4.3 18.9 19.06c-.23 1.02-.83 1.27-1.68.79l-4.65-3.43-2.24 2.16c-.25.25-.46.46-.94.46l.33-4.74 8.63-7.8c.38-.33-.08-.52-.58-.19L6.44 13.2l-4.6-1.44c-1-.31-1.02-1 .21-1.48L20.65 2.9c.83-.31 1.56.2 1.29 1.4Z"/></svg>
+        </button>
+        <span class="side-foot-label">bmrng.app</span>
       </div>
     </aside>
 
@@ -70,7 +84,10 @@
   <div class="install-bar">
     <div id="progress" class="progress" hidden>
       <div class="bar"><div id="bar-fill" class="fill"></div></div>
-      <div id="progress-text" class="progress-text"></div>
+      <div class="progress-row">
+        <span id="progress-text" class="progress-text"></span>
+        <button id="cancel-install" class="cancel-btn" hidden>Отменить</button>
+      </div>
     </div>
     <button id="install" class="btn-primary" disabled>Установить</button>
   </div>
@@ -158,6 +175,18 @@
     <div class="modal-actions col">
       <button id="upd-apply" class="btn-primary">Обновить и перезапустить</button>
       <button id="upd-later" class="link">Позже</button>
+    </div>
+  </div>
+</div>
+
+<div id="notowned-modal" class="modal" hidden>
+  <div class="modal-card center">
+    <div class="upd-badge" style="background:rgba(183,121,31,.14);color:var(--warn)">!</div>
+    <b style="font-size:18px">Нет в покупках этого Apple ID</b>
+    <div id="notowned-list" class="muted" style="font-weight:600;color:var(--ink)"></div>
+    <div class="muted">Восстановить можно только приложения, которые раньше уже скачивали под этим Apple ID. Эти приложения на данном Apple ID, похоже, никогда не устанавливали — поэтому вернуть их не получится.<br><br>Проверьте, что вошли в тот Apple ID, под которым приложение стояло раньше.</div>
+    <div class="modal-actions col">
+      <button id="notowned-ok" class="btn-primary">Понятно</button>
     </div>
   </div>
 </div>

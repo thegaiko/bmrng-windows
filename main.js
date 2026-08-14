@@ -35,7 +35,11 @@ function pythonBase() {
 }
 
 // ── запуск процессов ────────────────────────────────────────────
-function run(cmd, args, { env = {}, onData, timeoutMs } = {}) {
+// отмена установки: помеченные процессы можно разом убить
+let cancelRequested = false;
+const installChildren = new Set();
+
+function run(cmd, args, { env = {}, onData, timeoutMs, track } = {}) {
   return new Promise((resolve) => {
     let child;
     try { child = spawn(cmd, args, { env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...env } }); }
@@ -43,8 +47,9 @@ function run(cmd, args, { env = {}, onData, timeoutMs } = {}) {
     // Закрываем stdin: если инструмент вдруг ждёт интерактивный ввод (2FA/пароль) —
     // получит EOF и завершится с ошибкой, а не зависнет навсегда (частая причина «вход… и ничего»).
     try { child.stdin.end(); } catch {}
+    if (track) installChildren.add(child);
     let out = ""; let done = false; let timer = null;
-    const finish = (res) => { if (done) return; done = true; if (timer) clearTimeout(timer); resolve(res); };
+    const finish = (res) => { if (done) return; done = true; if (timer) clearTimeout(timer); if (track) installChildren.delete(child); resolve(res); };
     const cap = (d) => { const s = d.toString(); out += s; if (onData) onData(s); };
     child.stdout.on("data", cap);
     child.stderr.on("data", cap);
@@ -63,6 +68,19 @@ function lastJSON(text) {
     if (t.startsWith("{")) { try { obj = JSON.parse(t); } catch {} }
   }
   return obj;
+}
+
+// Ошибка «приложения не было в истории покупок этого Apple ID»
+// (лицензии нет, и купить/получить её не удалось).
+function notOwnedError(text, needLicense) {
+  const t = (text || "").toLowerCase();
+  const patterns = [
+    "not purchased", "previously purchased", "has not purchased", "not been purchased",
+    "obtain a license", "no longer available", "is not available", "isn't available",
+    "not eligible", "purchase it from", "account does not have", "failed to obtain",
+  ];
+  if (patterns.some((p) => t.includes(p))) return true;
+  return !!needLicense; // потребовалась лицензия, но получить не удалось
 }
 
 // ── конфиг (токен bmrng) ────────────────────────────────────────
@@ -206,6 +224,8 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
   const send = (m) => e.sender.send("install-progress", m);
   const ipaFile = path.join(os.tmpdir(), `${app.key}.ipa`);
   try { fs.unlinkSync(ipaFile); } catch {}
+  cancelRequested = false;
+  const cancelled = () => { try { fs.unlinkSync(ipaFile); } catch {} send({ phase: "error", line: "⏹ Отменено" }); return { ok: false, cancelled: true }; };
 
   const sels = selectors(app);
   const start = Math.max(0, fromIndex || 0);
@@ -221,42 +241,64 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     for (const f of [ipaFile, ipaFile + ".tmp"]) { try { sz += fs.statSync(f).size; } catch {} }
     if (sz > 0) send({ phase: "download", app: app.name, bytes: sz });
   }, 400);
-  let ok = false; let lastOut = ""; let usedIndex = -1;
+  let ok = false; let lastOut = ""; let allOut = ""; let usedIndex = -1; let needLicense = false;
+  // Проход 1: ТОЛЬКО download (без --purchase). Скачивает уже купленное приложение
+  // через существующую сессию и НЕ вызывает подтверждений входа в Apple ID.
   for (let i = start; i < sels.length; i++) {
     const sel = sels[i];
     if (sels.length > 1) send({ line: `Вариант ${i + 1}/${sels.length}…` });
-    let r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]));
-    lastOut = r.out;
+    const r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true });
+    if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
+    lastOut = r.out; allOut += "\n" + r.out;
     if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; usedIndex = i; break; }
-    if (r.out.toLowerCase().includes("license is required")) {
-      send({ line: "Приобретаю лицензию…" });
-      r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--purchase", "--format", "json", "--non-interactive"]));
-      lastOut = r.out;
-      if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; usedIndex = i; break; }
-    }
+    if (r.out.toLowerCase().includes("license is required")) needLicense = true;
     try { fs.unlinkSync(ipaFile); } catch {}
   }
+  // Проход 2: если ничего не скачалось и это ОДИНОЧНОЕ приложение с «license required» —
+  // один раз получаем лицензию (может запросить подтверждение Apple ID, но всего одно).
+  // Для приложений с несколькими ID покупку НЕ делаем: иначе Apple засыпает
+  // подтверждениями по каждому чужому ID (и можно случайно получить не то приложение).
+  if (!ok && needLicense && sels.length === 1) {
+    send({ line: "Получаю лицензию…" });
+    const r = await run(tool, ipa(["download", ...sels[start], "-o", ipaFile, "--purchase", "--format", "json", "--non-interactive"]), { track: true });
+    if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
+    lastOut = r.out; allOut += "\n" + r.out;
+    if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; usedIndex = start; }
+    else { try { fs.unlinkSync(ipaFile); } catch {} }
+  }
   clearInterval(dlPoll);
+  if (cancelRequested) return cancelled();
   if (!ok) {
     const err = (lastJSON(lastOut) || {}).error || (lastOut || "").toString().trim().replace(/\s+/g, " ").slice(-300) || "не удалось скачать";
-    send({ phase: "error", line: `✗ ${err}` });
-    return { ok: false, error: err, total: sels.length, triedFrom: start };
+    // Приложение не в истории покупок Apple ID (лицензии нет и купить/получить не удалось)
+    const notOwned = notOwnedError(allOut, needLicense);
+    send({ phase: "error", line: notOwned ? `✗ «${app.name}» не в покупках этого Apple ID` : `✗ ${err}` });
+    return { ok: false, error: err, notOwned, total: sels.length, triedFrom: start };
   }
   send({ phase: "install", progress: 0, line: "Устанавливаю на iPhone…" });
   const ir = await run(py.cmd, [...py.pre, "apps", "install", ipaFile], {
     env: { PYMOBILEDEVICE3_UDID: udid },
+    track: true,
     onData: (s) => {
       const m = s.match(/(\d{1,3})%\s*Complete/);
       if (m) send({ phase: "install", progress: Number(m[1]) / 100, line: `${m[1]}% — установка` });
     },
   });
   try { fs.unlinkSync(ipaFile); } catch {}
+  if (cancelRequested) return cancelled();
   if (ir.code === 0 || ir.out.includes("Installation succeed")) {
     send({ phase: "done", progress: 1, line: "✓ Установлено" });
     return { ok: true, usedIndex, total: sels.length };
   }
   send({ phase: "error", line: "✗ ошибка установки" });
   return { ok: false, error: "install failed", total: sels.length };
+});
+
+ipcMain.handle("cancel-install", async () => {
+  cancelRequested = true;
+  for (const c of installChildren) { try { c.kill("SIGKILL"); } catch {} }
+  installChildren.clear();
+  return true;
 });
 
 // ── IPC: аккаунт bmrng (тот же бэкенд) ──────────────────────────
@@ -280,7 +322,7 @@ async function apiAuth(pathname, method, body) {
     return { status: res.status, data: await res.json().catch(() => ({})) };
   } catch (e) { return { status: 0, data: { detail: "Ошибка сети" } }; }
 }
-ipcMain.handle("bmrng-register", async (_e, b) => apiPost("/api/register/", b));
+ipcMain.handle("bmrng-register", async (_e, b) => apiPost("/api/register/", { ...b, platform: isWin ? "win" : "mac" }));
 ipcMain.handle("bmrng-verify", async (_e, b) => apiPost("/api/verify-email/", b));
 ipcMain.handle("bmrng-login", async (_e, b) => apiPost("/api/login/", b));
 ipcMain.handle("bmrng-me", async () => apiAuth("/api/me/", "GET"));

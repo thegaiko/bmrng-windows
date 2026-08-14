@@ -28,6 +28,7 @@ const state = {
   cfg: {}, apps: [], selected: new Set(), owned: {}, devices: [], device: null,
   account: null, customId: "", busy: false,
   installed: {}, // ключ приложения → { usedIndex, total, exhausted }
+  cancelInstall: false,
   pay: { mode: "yookassa", contact: "https://t.me/metagaiko" },
   balance: 0, tuQty: 0, tuDiscount: 0, tuPromo: "",
   onb: { mode: "welcome", step: 0, name: "", email: "", password: "", code: "" },
@@ -338,9 +339,17 @@ async function tryNextVersion(app) {
   if (next >= info.total) return;
   if (!state.device) return alert("Подключите iPhone");
   if (!state.account) return alert("Войдите в Apple ID");
-  setBusyMain(true); showProgress(true); setBar(null, "Другая версия…");
+  state.cancelInstall = false;
+  setBusyMain(true); showCancel(true); showProgress(true); setBar(null, "Другая версия…");
   log(`\n↻ ${app.name}: пробую другую версию (вариант ${next + 1}/${info.total})…`);
   const r = await api.install({ app, udid: state.device.udid, fromIndex: next });
+  showCancel(false);
+  if (r.cancelled || state.cancelInstall) {
+    log("⏹ Отменено"); setBar(0, "Отменено");
+    setBusyMain(false); renderApps(); updateInstallBtn();
+    setTimeout(() => showProgress(false), 3000);
+    return;
+  }
   if (r.ok) {
     state.installed[app.key] = { usedIndex: r.usedIndex, total: r.total };
     logInstall(app, r.usedIndex);
@@ -350,10 +359,17 @@ async function tryNextVersion(app) {
     if (r.exhausted) { state.installed[app.key].exhausted = true; log("✗ Больше версий для этого приложения нет."); }
     else log(`✗ ${r.error || "не удалось установить эту версию"}`);
     setBar(0, "Не удалось");
+    if (r.notOwned) showNotOwnedModal([app.name]);
   }
   setBusyMain(false); renderApps(); updateInstallBtn();
   setTimeout(() => showProgress(false), 3000);
   setTimeout(refreshDevices, 2500);
+}
+
+function showNotOwnedModal(names) {
+  const list = $("#notowned-list");
+  list.textContent = names.length === 1 ? `«${names[0]}»` : names.map((n) => `«${n}»`).join(", ");
+  $("#notowned-modal").hidden = false;
 }
 function updateInstallBtn() {
   $("#install").disabled = state.busy || !state.account || !state.device || (state.selected.size === 0 && !state.customId);
@@ -405,6 +421,20 @@ function wireMain() {
   };
   $("#check-owned").onclick = checkOwned;
   $("#install").onclick = () => installList(state.apps.filter((a) => state.selected.has(a.key)));
+  $("#cancel-install").onclick = async () => {
+    state.cancelInstall = true;
+    $("#cancel-install").disabled = true;
+    log("⏹ Отмена…"); setBar(null, "Отмена…");
+    await api.cancelInstall();
+  };
+  $("#refresh-balance").onclick = async (e) => {
+    const b = e.currentTarget; b.classList.remove("spin"); void b.offsetWidth; b.classList.add("spin");
+    await refreshBalance();
+  };
+  $("#btn-support").onclick = () => api.openExternal("https://t.me/metagaiko");
+  $("#notowned-ok").onclick = () => ($("#notowned-modal").hidden = true);
+  $("#foot-site").onclick = () => api.openExternal("https://bmrng.app");
+  $("#foot-tg").onclick = () => api.openExternal("https://t.me/thegaiko");
   $("#btn-log").onclick = () => ($("#log-modal").hidden = false);
   $("#log-close").onclick = () => ($("#log-modal").hidden = true);
   $("#add-id").onclick = () => { $("#id-input").value = ""; $("#id-modal").hidden = false; };
@@ -482,26 +512,42 @@ async function installList(list) {
   if (!list.length) return;
   await refreshBalance();
   if (state.balance <= 0) { openTopup(); alert("Закончились установки — пополните баланс."); return; }
-  setBusyMain(true);
+  state.cancelInstall = false;
+  setBusyMain(true); showCancel(true);
   showProgress(true); setBar(null, "Подготовка…");
   log(`\n── Установка ${list.length} приложени(й) на ${state.device.name} ──`);
   let done = 0;
+  const notOwned = [];
+  let cancelled = false;
   for (let i = 0; i < list.length; i++) {
+    if (state.cancelInstall) { cancelled = true; break; }
     if (state.balance <= 0) { log("✗ Закончились установки"); setBusyMain(false); openTopup(); break; }
     log(`\n[${i + 1}/${list.length}] ${list[i].name}`);
     const r = await api.install({ app: list[i], udid: state.device.udid });
+    if (r.cancelled || state.cancelInstall) { cancelled = true; log("⏹ Установка отменена"); break; }
     if (r.ok) {
       done++;
       if ((r.total || 1) > 1) { state.installed[list[i].key] = { usedIndex: r.usedIndex, total: r.total }; renderApps(); }
       logInstall(list[i], r.usedIndex);
       const c = await api.consume();
       if (c.status === 200) { state.balance = c.data.balance; $("#balance-n").textContent = state.balance; }
+    } else if (r.notOwned) {
+      notOwned.push(list[i].name);
+      log(`  ✗ нет в покупках этого Apple ID`);
     }
   }
-  log(`\nГотово: ${done} из ${list.length} установлено.`);
-  $("#phone-screen").innerHTML = done ? "<div>✓<br>Готово</div>" : "<div>✗<br>Ошибка</div>";
-  setBar(done ? 1 : 0, done ? `Установлено: ${done} из ${list.length}` : "Не удалось");
+  showCancel(false);
+  if (cancelled) {
+    log(`\n⏹ Отменено. Установлено: ${done} из ${list.length}.`);
+    $("#phone-screen").innerHTML = "<div>⏹<br>Отменено</div>";
+    setBar(0, `Отменено · установлено ${done}`);
+  } else {
+    log(`\nГотово: ${done} из ${list.length} установлено.`);
+    $("#phone-screen").innerHTML = done ? "<div>✓<br>Готово</div>" : "<div>✗<br>Ошибка</div>";
+    setBar(done ? 1 : 0, done ? `Установлено: ${done} из ${list.length}` : "Не удалось");
+  }
   setBusyMain(false);
+  if (notOwned.length && !cancelled) showNotOwnedModal(notOwned);
   setTimeout(() => showProgress(false), 3000);
   setTimeout(refreshDevices, 2500);
 }
@@ -525,6 +571,11 @@ function onProgress(m) {
   }
 }
 function showProgress(on) { $("#progress").hidden = !on; }
+function showCancel(on) {
+  $("#cancel-install").hidden = !on;
+  $("#cancel-install").disabled = false;
+  $("#install").hidden = on;
+}
 function setBar(p, text) {
   const fill = $("#bar-fill");
   if (p === null || p === undefined) fill.classList.add("indeterminate");
