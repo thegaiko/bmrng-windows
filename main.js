@@ -1,8 +1,31 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const crypto = require("crypto");
+
+// Стабильный отпечаток компьютера (хэш аппаратного ID) — для защиты от накрутки
+// бесплатных установок через новые аккаунты. Сырой ID не передаём, только хэш.
+let _machineId = null;
+function machineId() {
+  if (_machineId) return _machineId;
+  let raw = "";
+  try {
+    if (process.platform === "win32") {
+      const out = execSync('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', { encoding: "utf8", timeout: 4000 });
+      const m = out.match(/MachineGuid\s+REG_SZ\s+([\w-]+)/i);
+      raw = m ? m[1] : "";
+    } else {
+      const out = execSync("ioreg -rd1 -c IOPlatformExpertDevice", { encoding: "utf8", timeout: 4000 });
+      const m = out.match(/IOPlatformUUID"\s*=\s*"([\w-]+)"/);
+      raw = m ? m[1] : "";
+    }
+  } catch { /* фолбэк ниже */ }
+  if (!raw) raw = `${os.hostname()}|${os.platform()}|${os.arch()}`;
+  _machineId = crypto.createHash("sha256").update("bmrng:" + raw).digest("hex").slice(0, 32);
+  return _machineId;
+}
 
 const isWin = process.platform === "win32";
 const API = "https://bmrng.app";
@@ -165,11 +188,22 @@ ipcMain.handle("account-info", async () => {
   return null;
 });
 
+// Временные сбои серверов авторизации Apple (Apple перекраивает эндпоинты / отдаёт мусор)
+function appleAuthGlitch(out) {
+  return /unexpected response from apple|non-plist|empty body|http 204|http 404|http 5\d\d|502 bad gateway|service unavailable/i.test(out || "");
+}
+
 ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   const tool = ipatoolPath();
   const args = ["auth", "login", "-e", email, "-p", password, "--format", "json", "--non-interactive"];
   if (code) args.push("--auth-code", code);
-  const r = await run(tool, ipa(args), { timeoutMs: 90000 });
+  // до 3 попыток на временные глюки auth-серверов Apple (204/404/5xx)
+  let r;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (attempt > 1) await new Promise((res) => setTimeout(res, 1500));
+    r = await run(tool, ipa(args), { timeoutMs: 90000 });
+    if (!appleAuthGlitch(r.out) || r.timedOut) break;
+  }
   const low = r.out.toLowerCase();
   const raw = (r.out || "").toString().trim().replace(/\s+/g, " ").slice(-360);
   if (r.timedOut) return { ok: false, error: "Превышено время ожидания входа. Проверьте интернет и попробуйте снова.", raw };
@@ -188,14 +222,16 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   // без кода и есть признаки 2FA (или краш на приглашении) → показываем поле для кода
   if (!code && (needs || crashed)) return { ok: false, needCode: true, raw };
 
-  // Чистое сообщение — без Go-стектрейса в интерфейсе
+  // Чистое сообщение — без Go-стектрейса / сырых HTTP-кодов в интерфейсе
   let err = (lastJSON(r.out) || {}).error;
-  if (!err || crashed) {
+  if (appleAuthGlitch(r.out)) {
+    err = "Серверы Apple сейчас не отвечают на вход (временная проблема на стороне Apple). Попробуйте через несколько минут, смените сеть или VPN-сервер.";
+  } else if (!err || crashed) {
     err = crashed
       ? "Не удалось войти. Если включена двухфакторная аутентификация — введите код с ваших устройств Apple. Иначе проверьте Apple ID и пароль."
       : (raw || "Не удалось войти");
   }
-  return { ok: false, error: String(err).slice(0, 200), raw };
+  return { ok: false, error: String(err).slice(0, 220), raw };
 });
 
 ipcMain.handle("account-logout", async () => { await run(ipatoolPath(), ipa(["auth", "revoke"])); return true; });
@@ -378,7 +414,7 @@ async function apiAuth(pathname, method, body) {
     return { status: res.status, data: await res.json().catch(() => ({})) };
   } catch (e) { return { status: 0, data: { detail: "Ошибка сети" } }; }
 }
-ipcMain.handle("bmrng-register", async (_e, b) => apiPost("/api/register/", { ...b, platform: isWin ? "win" : "mac" }));
+ipcMain.handle("bmrng-register", async (_e, b) => apiPost("/api/register/", { ...b, platform: isWin ? "win" : "mac", device_id: machineId() }));
 ipcMain.handle("bmrng-verify", async (_e, b) => apiPost("/api/verify-email/", b));
 ipcMain.handle("bmrng-login", async (_e, b) => apiPost("/api/login/", b));
 ipcMain.handle("bmrng-me", async () => apiAuth("/api/me/", "GET"));
