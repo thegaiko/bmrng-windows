@@ -428,7 +428,11 @@ ipcMain.handle("check-update", async () => {
     const data = await res.json();
     const cur = app.getVersion();
     const latest = data.version;
-    const asset = data[isWin ? "win" : "mac"] || {};
+    // выбираем нужную сборку под платформу и архитектуру (Intel-Mac → mac_x64)
+    let asset;
+    if (isWin) asset = data.win || {};
+    else if (process.arch === "x64" && data.mac_x64) asset = data.mac_x64;
+    else asset = data.mac || {};
     if (latest && cmpVersions(latest, cur) > 0 && asset.url) {
       return {
         available: true, version: latest, current: cur,

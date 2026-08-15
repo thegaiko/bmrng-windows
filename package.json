@@ -1,7 +1,7 @@
 {
   "name": "bmrng",
   "productName": "bmrng",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "description": "Возвращаем приложения на iPhone — Windows-версия",
   "main": "main.js",
   "author": "bmrng",
@@ -52,14 +52,8 @@
     },
     "mac": {
       "target": [
-        {
-          "target": "dmg",
-          "arch": "arm64"
-        },
-        {
-          "target": "zip",
-          "arch": "arm64"
-        }
+        "dmg",
+        "zip"
       ],
       "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
