@@ -360,6 +360,7 @@ async function tryNextVersion(app) {
     else log(`✗ ${r.error || "не удалось установить эту версию"}`);
     setBar(0, "Не удалось");
     if (r.notOwned) showNotOwnedModal([app.name]);
+    else if (r.corrupt) showCorruptModal([{ name: app.name, freeGB: r.freeGB, badMB: r.badMB }]);
   }
   setBusyMain(false); renderApps(); updateInstallBtn();
   setTimeout(() => showProgress(false), 3000);
@@ -370,6 +371,25 @@ function showNotOwnedModal(names) {
   const list = $("#notowned-list");
   list.textContent = names.length === 1 ? `«${names[0]}»` : names.map((n) => `«${n}»`).join(", ");
   $("#notowned-modal").hidden = false;
+}
+
+function showCorruptModal(items) {
+  const names = items.map((x) => x.name);
+  const lowDisk = items.some((x) => x.freeGB != null && x.freeGB < 2);
+  const freeGB = items.map((x) => x.freeGB).find((g) => g != null);
+  const badMB = items.map((x) => x.badMB).find((m) => m != null);
+  $("#corrupt-list").textContent = names.length === 1 ? `«${names[0]}»` : names.map((n) => `«${n}»`).join(", ");
+  const diskEl = $("#corrupt-disk");
+  if (lowDisk) {
+    $("#corrupt-msg").textContent = "На диске мало места — приложению нужно 1–2 ГБ свободно (при установке файл копируется). Освободите место и попробуйте снова.";
+    diskEl.textContent = freeGB != null ? `Сейчас свободно: ${freeGB} ГБ.` : "";
+    diskEl.style.color = "var(--danger)";
+  } else {
+    $("#corrupt-msg").textContent = "Приложение скачивается повреждённым. Место на диске в порядке — чаще всего причина в нестабильном интернете или VPN. Попробуйте сменить сеть (Wi-Fi ↔ моб. интернет), отключить VPN и повторить.";
+    diskEl.textContent = (freeGB != null ? `Свободно: ${freeGB} ГБ. ` : "") + (badMB != null ? `Скачалось: ${badMB} МБ.` : "");
+    diskEl.style.color = "var(--dim)";
+  }
+  $("#corrupt-modal").hidden = false;
 }
 function updateInstallBtn() {
   $("#install").disabled = state.busy || !state.account || !state.device || (state.selected.size === 0 && !state.customId);
@@ -433,6 +453,7 @@ function wireMain() {
   };
   $("#btn-support").onclick = () => api.openExternal("https://t.me/metagaiko");
   $("#notowned-ok").onclick = () => ($("#notowned-modal").hidden = true);
+  $("#corrupt-ok").onclick = () => ($("#corrupt-modal").hidden = true);
   $("#foot-site").onclick = () => api.openExternal("https://bmrng.app");
   $("#foot-tg").onclick = () => api.openExternal("https://t.me/thegaiko");
   $("#btn-log").onclick = () => ($("#log-modal").hidden = false);
@@ -518,6 +539,7 @@ async function installList(list) {
   log(`\n── Установка ${list.length} приложени(й) на ${state.device.name} ──`);
   let done = 0;
   const notOwned = [];
+  const corrupt = [];
   let cancelled = false;
   for (let i = 0; i < list.length; i++) {
     if (state.cancelInstall) { cancelled = true; break; }
@@ -534,6 +556,9 @@ async function installList(list) {
     } else if (r.notOwned) {
       notOwned.push(list[i].name);
       log(`  ✗ нет в покупках этого Apple ID`);
+    } else if (r.corrupt) {
+      corrupt.push({ name: list[i].name, freeGB: r.freeGB, badMB: r.badMB });
+      log(`  ✗ файл повреждается при загрузке`);
     }
   }
   showCancel(false);
@@ -548,6 +573,7 @@ async function installList(list) {
   }
   setBusyMain(false);
   if (notOwned.length && !cancelled) showNotOwnedModal(notOwned);
+  else if (corrupt.length && !cancelled) showCorruptModal(corrupt);
   setTimeout(() => showProgress(false), 3000);
   setTimeout(refreshDevices, 2500);
 }

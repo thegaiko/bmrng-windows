@@ -191,6 +191,19 @@
   </div>
 </div>
 
+<div id="corrupt-modal" class="modal" hidden>
+  <div class="modal-card center">
+    <div class="upd-badge" style="background:rgba(218,59,64,.12);color:var(--danger)">!</div>
+    <b style="font-size:18px">Файл повреждается при загрузке</b>
+    <div id="corrupt-list" class="muted" style="font-weight:600;color:var(--ink)"></div>
+    <div id="corrupt-msg" class="muted"></div>
+    <div id="corrupt-disk" class="muted" style="font-weight:600;color:var(--danger)"></div>
+    <div class="modal-actions col">
+      <button id="corrupt-ok" class="btn-primary">Понятно</button>
+    </div>
+  </div>
+</div>
+
 <script src="renderer.js"></script>
 </body>
 </html>

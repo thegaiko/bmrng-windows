@@ -70,6 +70,12 @@ function lastJSON(text) {
   return obj;
 }
 
+// Свободное место в каталоге (байт). ipatool при вшивании лицензии копирует IPA,
+// поэтому места нужно ~вдвое больше размера приложения.
+function freeBytes(dir) {
+  try { const s = fs.statfsSync(dir); return s.bavail * s.bsize; } catch { return null; }
+}
+
 // Проверка, что скачанный файл — валидный zip/ipa (сигнатура "PK").
 // Обрезанная загрузка большого приложения даёт битый файл → ipatool не может вшить лицензию.
 function isValidZip(p) {
@@ -257,13 +263,18 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
   }
 
   send({ phase: "download", app: app.name, line: `Скачивание «${app.name}»…` });
+  // предупреждение о нехватке места (частая причина «not a valid zip» на больших приложениях)
+  const freeAtStart = freeBytes(os.tmpdir());
+  if (freeAtStart != null && freeAtStart < 2 * 1024 ** 3) {
+    send({ line: `⚠ Мало места на диске (~${(freeAtStart / 1024 ** 3).toFixed(1)} ГБ). Для установки нужно 1–2 ГБ свободно.` });
+  }
   // поллинг размера скачиваемого файла → прогресс в МБ
   const dlPoll = setInterval(() => {
     let sz = 0;
     for (const f of [ipaFile, ipaFile + ".tmp"]) { try { sz += fs.statSync(f).size; } catch {} }
     if (sz > 0) send({ phase: "download", app: app.name, bytes: sz });
   }, 400);
-  let ok = false; let lastOut = ""; let allOut = ""; let usedIndex = -1; let needLicense = false;
+  let ok = false; let lastOut = ""; let allOut = ""; let usedIndex = -1; let needLicense = false; let lastBadSize = null;
   // Проход 1: ТОЛЬКО download (без --purchase). Скачивает уже купленное приложение
   // через существующую сессию и НЕ вызывает подтверждений входа в Apple ID.
   for (let i = start; i < sels.length; i++) {
@@ -277,6 +288,8 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
       r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true });
       if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
       if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { good = true; break; }
+      // диагностика: размер битого файла (обрыв → маленький, подмена контента → полный размер)
+      try { const sz = fs.statSync(ipaFile).size; if (sz) lastBadSize = sz; } catch {}
       // повторяем только повреждённую/оборванную загрузку; на «license required» и др. — сразу дальше
       const corrupt = /not a valid zip|apply patches|zip reader|unexpected eof|connection reset|reset by peer|timeout|eof/i.test(r.out)
                       || (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && !isValidZip(ipaFile));
@@ -305,8 +318,15 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     const err = (lastJSON(lastOut) || {}).error || (lastOut || "").toString().trim().replace(/\s+/g, " ").slice(-300) || "не удалось скачать";
     // Приложение не в истории покупок Apple ID (лицензии нет и купить/получить не удалось)
     const notOwned = notOwnedError(allOut, needLicense);
-    send({ phase: "error", line: notOwned ? `✗ «${app.name}» не в покупках этого Apple ID` : `✗ ${err}` });
-    return { ok: false, error: err, notOwned, total: sels.length, triedFrom: start };
+    // Файл стабильно повреждается (обычно мало места на диске или нестабильный интернет)
+    const corrupt = !notOwned && /not a valid zip|replicate|apply patches|zip reader|unexpected eof/i.test(allOut);
+    const fb = freeBytes(os.tmpdir());
+    const freeGB = fb != null ? +(fb / 1024 ** 3).toFixed(1) : null;
+    const badMB = lastBadSize != null ? Math.round(lastBadSize / 1048576) : null;
+    if (corrupt && badMB != null) send({ line: `диагностика: скачалось ${badMB} МБ, файл невалиден` });
+    send({ phase: "error", line: notOwned ? `✗ «${app.name}» не в покупках этого Apple ID`
+      : corrupt ? `✗ «${app.name}»: файл повреждается при загрузке` : `✗ ${err}` });
+    return { ok: false, error: err, notOwned, corrupt, freeGB, badMB, total: sels.length, triedFrom: start };
   }
   send({ phase: "install", progress: 0, line: "Устанавливаю на iPhone…" });
   const ir = await run(py.cmd, [...py.pre, "apps", "install", ipaFile], {
