@@ -360,7 +360,7 @@ async function tryNextVersion(app) {
     else log(`✗ ${r.error || "не удалось установить эту версию"}`);
     setBar(0, "Не удалось");
     if (r.notOwned) showNotOwnedModal([app.name]);
-    else if (r.corrupt) showCorruptModal([{ name: app.name, freeGB: r.freeGB, badMB: r.badMB }]);
+    else if (r.corrupt || r.netError) showCorruptModal([{ name: app.name, freeGB: r.freeGB, badMB: r.badMB, netError: r.netError }]);
   }
   setBusyMain(false); renderApps(); updateInstallBtn();
   setTimeout(() => showProgress(false), 3000);
@@ -375,16 +375,23 @@ function showNotOwnedModal(names) {
 
 function showCorruptModal(items) {
   const names = items.map((x) => x.name);
+  const net = items.some((x) => x.netError);
   const lowDisk = items.some((x) => x.freeGB != null && x.freeGB < 2);
   const freeGB = items.map((x) => x.freeGB).find((g) => g != null);
   const badMB = items.map((x) => x.badMB).find((m) => m != null);
   $("#corrupt-list").textContent = names.length === 1 ? `«${names[0]}»` : names.map((n) => `«${n}»`).join(", ");
   const diskEl = $("#corrupt-disk");
-  if (lowDisk) {
+  if (net) {
+    $("#corrupt-title").textContent = "Нет связи с серверами Apple";
+    $("#corrupt-msg").textContent = "Приложение не может связаться с серверами загрузки Apple (iTunes). Проверьте интернет. Если вы в России — включите или смените VPN (серверы Apple часто недоступны без него). Можно также сменить DNS на 1.1.1.1 или 8.8.8.8. Затем повторите.";
+    diskEl.textContent = ""; diskEl.style.color = "var(--dim)";
+  } else if (lowDisk) {
+    $("#corrupt-title").textContent = "Файл повреждается при загрузке";
     $("#corrupt-msg").textContent = "На диске мало места — приложению нужно 1–2 ГБ свободно (при установке файл копируется). Освободите место и попробуйте снова.";
     diskEl.textContent = freeGB != null ? `Сейчас свободно: ${freeGB} ГБ.` : "";
     diskEl.style.color = "var(--danger)";
   } else {
+    $("#corrupt-title").textContent = "Файл повреждается при загрузке";
     $("#corrupt-msg").textContent = "Приложение скачивается повреждённым. Место на диске в порядке — чаще всего причина в нестабильном интернете или VPN. Попробуйте сменить сеть (Wi-Fi ↔ моб. интернет), отключить VPN и повторить.";
     diskEl.textContent = (freeGB != null ? `Свободно: ${freeGB} ГБ. ` : "") + (badMB != null ? `Скачалось: ${badMB} МБ.` : "");
     diskEl.style.color = "var(--dim)";
@@ -556,9 +563,9 @@ async function installList(list) {
     } else if (r.notOwned) {
       notOwned.push(list[i].name);
       log(`  ✗ нет в покупках этого Apple ID`);
-    } else if (r.corrupt) {
-      corrupt.push({ name: list[i].name, freeGB: r.freeGB, badMB: r.badMB });
-      log(`  ✗ файл повреждается при загрузке`);
+    } else if (r.corrupt || r.netError) {
+      corrupt.push({ name: list[i].name, freeGB: r.freeGB, badMB: r.badMB, netError: r.netError });
+      log(r.netError ? `  ✗ нет связи с серверами Apple` : `  ✗ файл повреждается при загрузке`);
     }
   }
   showCancel(false);

@@ -318,15 +318,18 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     const err = (lastJSON(lastOut) || {}).error || (lastOut || "").toString().trim().replace(/\s+/g, " ").slice(-300) || "не удалось скачать";
     // Приложение не в истории покупок Apple ID (лицензии нет и купить/получить не удалось)
     const notOwned = notOwnedError(allOut, needLicense);
-    // Файл стабильно повреждается (обычно мало места на диске или нестабильный интернет)
-    const corrupt = !notOwned && /not a valid zip|replicate|apply patches|zip reader|unexpected eof/i.test(allOut);
+    // Нет связи с серверами загрузки Apple (DNS-таймаут / обрыв) — сеть/VPN/DNS у пользователя
+    const netError = !notOwned && /failed to send http request|i\/o timeout|no such host|dial tcp|connection refused|round trip|tls handshake|network is unreachable|context deadline|lookup [^ ]*apple/i.test(allOut);
+    // Файл стабильно повреждается (обычно нестабильный интернет или мало места)
+    const corrupt = !notOwned && !netError && /not a valid zip|replicate|apply patches|zip reader|unexpected eof/i.test(allOut);
     const fb = freeBytes(os.tmpdir());
     const freeGB = fb != null ? +(fb / 1024 ** 3).toFixed(1) : null;
     const badMB = lastBadSize != null ? Math.round(lastBadSize / 1048576) : null;
     if (corrupt && badMB != null) send({ line: `диагностика: скачалось ${badMB} МБ, файл невалиден` });
     send({ phase: "error", line: notOwned ? `✗ «${app.name}» не в покупках этого Apple ID`
+      : netError ? `✗ «${app.name}»: нет связи с серверами Apple`
       : corrupt ? `✗ «${app.name}»: файл повреждается при загрузке` : `✗ ${err}` });
-    return { ok: false, error: err, notOwned, corrupt, freeGB, badMB, total: sels.length, triedFrom: start };
+    return { ok: false, error: err, notOwned, corrupt, netError, freeGB, badMB, total: sels.length, triedFrom: start };
   }
   send({ phase: "install", progress: 0, line: "Устанавливаю на iPhone…" });
   const ir = await run(py.cmd, [...py.pre, "apps", "install", ipaFile], {
