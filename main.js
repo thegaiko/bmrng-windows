@@ -173,13 +173,23 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   const ij = lastJSON(info.out) || {};
   if (ij.success && (ij.name || ij.email)) return { ok: true, raw };
 
+  // ipatool иногда паникует (Go-стектрейс) на приглашении ввести 2FA-код —
+  // в спавненном окне на Windows нет консоли. С кодом (--auth-code) приглашения нет.
+  const crashed = /panic:|goroutine\s+\d+|runtime error|\.go:\d+|cobra/i.test(r.out);
   // не вошли — нужен ли 2FA-код?
   const needs = low.includes("code") || low.includes("2fa") || low.includes("two-factor") ||
                 low.includes("verification") || low.includes("configurator") || low.includes("otp");
-  if (!code && needs) return { ok: false, needCode: true, raw };
+  // без кода и есть признаки 2FA (или краш на приглашении) → показываем поле для кода
+  if (!code && (needs || crashed)) return { ok: false, needCode: true, raw };
 
-  const err = (lastJSON(r.out) || {}).error || raw || "Не удалось войти";
-  return { ok: false, error: err, raw };
+  // Чистое сообщение — без Go-стектрейса в интерфейсе
+  let err = (lastJSON(r.out) || {}).error;
+  if (!err || crashed) {
+    err = crashed
+      ? "Не удалось войти. Если включена двухфакторная аутентификация — введите код с ваших устройств Apple. Иначе проверьте Apple ID и пароль."
+      : (raw || "Не удалось войти");
+  }
+  return { ok: false, error: String(err).slice(0, 200), raw };
 });
 
 ipcMain.handle("account-logout", async () => { await run(ipatoolPath(), ipa(["auth", "revoke"])); return true; });
