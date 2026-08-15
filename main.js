@@ -70,6 +70,18 @@ function lastJSON(text) {
   return obj;
 }
 
+// Проверка, что скачанный файл — валидный zip/ipa (сигнатура "PK").
+// Обрезанная загрузка большого приложения даёт битый файл → ipatool не может вшить лицензию.
+function isValidZip(p) {
+  try {
+    const fd = fs.openSync(p, "r");
+    const buf = Buffer.alloc(4);
+    const n = fs.readSync(fd, buf, 0, 4, 0);
+    fs.closeSync(fd);
+    return n >= 2 && buf[0] === 0x50 && buf[1] === 0x4b; // "PK"
+  } catch { return false; }
+}
+
 // Ошибка «приложения не было в истории покупок этого Apple ID»
 // (лицензии нет, и купить/получить её не удалось).
 function notOwnedError(text, needLicense) {
@@ -247,10 +259,21 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
   for (let i = start; i < sels.length; i++) {
     const sel = sels[i];
     if (sels.length > 1) send({ line: `Вариант ${i + 1}/${sels.length}…` });
-    const r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true });
-    if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
+    let r = null; let good = false;
+    // до 3 попыток: большие приложения (Сбер ~300 МБ) часто докачиваются не полностью
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (attempt > 1) send({ line: `Файл повреждён, повтор загрузки (${attempt}/3)…` });
+      try { fs.unlinkSync(ipaFile); } catch {}
+      r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true });
+      if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
+      if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { good = true; break; }
+      // повторяем только повреждённую/оборванную загрузку; на «license required» и др. — сразу дальше
+      const corrupt = /not a valid zip|apply patches|zip reader|unexpected eof|connection reset|reset by peer|timeout|eof/i.test(r.out)
+                      || (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && !isValidZip(ipaFile));
+      if (!corrupt) break;
+    }
     lastOut = r.out; allOut += "\n" + r.out;
-    if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; usedIndex = i; break; }
+    if (good) { ok = true; usedIndex = i; break; }
     if (r.out.toLowerCase().includes("license is required")) needLicense = true;
     try { fs.unlinkSync(ipaFile); } catch {}
   }
@@ -263,7 +286,7 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     const r = await run(tool, ipa(["download", ...sels[start], "-o", ipaFile, "--purchase", "--format", "json", "--non-interactive"]), { track: true });
     if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
     lastOut = r.out; allOut += "\n" + r.out;
-    if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success) { ok = true; usedIndex = start; }
+    if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { ok = true; usedIndex = start; }
     else { try { fs.unlinkSync(ipaFile); } catch {} }
   }
   clearInterval(dlPoll);
