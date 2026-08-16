@@ -392,21 +392,35 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     const cached = appId && cacheManifest && cacheManifest[appId];
     if (cached && cached.file && cached.evid) {
       const basePath = ipaFile + ".base";
-      try {
-        send({ line: "Загрузка с нашего сервера…" });
-        try { fs.unlinkSync(basePath); } catch {}
-        await downloadFile(`https://bmrng.app/cache/${cached.file}`, basePath, (_f, received) => {
-          if (received > 0) send({ phase: "download", app: app.name, bytes: received });
-        });
-        if (cancelRequested) { clearInterval(dlPoll); try { fs.unlinkSync(basePath); } catch {} return cancelled(); }
-        if (isValidZip(basePath)) {
-          send({ line: "Готовим установку…" });
-          try { fs.unlinkSync(ipaFile); } catch {}
-          r = await run(tool, ipa(["download", "-i", appId, "--external-version-id", String(cached.evid), "--reuse", basePath, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true });
-          allOut += "\n" + (r.out || "");
-          if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { good = true; usedIndex = i; usedCache = true; }
-        }
-      } catch (e) { allOut += "\ncache: " + String(e); }
+      const cacheUrl = `https://bmrng.app/cache/${cached.file}`;
+      const wantSize = Number(cached.size || 0);
+      try { fs.unlinkSync(basePath); } catch {} // свежая база, не чужой обрывок
+      // Скачиваем базу с ДОКАЧКОЙ: при обрыве продолжаем с места, а не с нуля.
+      // Готово только когда размер совпал с ожидаемым (иначе это обрывок). Стоп —
+      // при 2 попытках подряд без прогресса (мёртвый канал) → уходим на обычный путь.
+      let baseOk = false; let prevGot = -1; let stalls = 0;
+      for (let attempt = 1; attempt <= 15 && !cancelRequested; attempt++) {
+        send({ line: attempt === 1 ? "Загрузка с нашего сервера…" : "Догружаем с нашего сервера…" });
+        try {
+          await downloadFile(cacheUrl, basePath, (_f, received) => {
+            if (received > 0) send({ phase: "download", app: app.name, bytes: received });
+          });
+        } catch {}
+        if (cancelRequested) break;
+        let got = 0; try { got = fs.statSync(basePath).size; } catch {}
+        if (wantSize > 0 ? got >= wantSize : isValidZip(basePath)) { baseOk = true; break; }
+        if (got <= prevGot) { if (++stalls >= 2) break; } else stalls = 0;
+        prevGot = got;
+        await new Promise((res) => setTimeout(res, 1500)); // пауза перед докачкой
+      }
+      if (cancelRequested) { clearInterval(dlPoll); try { fs.unlinkSync(basePath); } catch {} return cancelled(); }
+      if (baseOk && isValidZip(basePath)) {
+        send({ line: "Готовим установку…" });
+        try { fs.unlinkSync(ipaFile); } catch {}
+        r = await run(tool, ipa(["download", "-i", appId, "--external-version-id", String(cached.evid), "--reuse", basePath, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true });
+        allOut += "\n" + (r.out || "");
+        if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { good = true; usedIndex = i; usedCache = true; }
+      }
       try { fs.unlinkSync(basePath); } catch {}
       if (good) { ok = true; lastOut = r.out; break; }
     }
@@ -667,21 +681,33 @@ ipcMain.handle("check-update", async () => {
   }
 });
 
+// Загрузка с ДОКАЧКОЙ (HTTP Range): если файл уже частично скачан, продолжаем с места,
+// а не с нуля. Критично на нестабильном интернете — иначе большой файл рестартует
+// бесконечно и никогда не доходит (жжёт трафик, «1 МБ в час» по факту).
 async function downloadFile(url, dest, onProgress) {
-  const res = await fetch(url, { redirect: "follow", cache: "no-store" });
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  const total = Number(res.headers.get("content-length") || 0);
-  const file = fs.createWriteStream(dest);
+  let start = 0;
+  try { start = fs.statSync(dest).size; } catch { start = 0; }
+  const headers = start > 0 ? { Range: `bytes=${start}-` } : {};
+  const res = await fetch(url, { redirect: "follow", cache: "no-store", headers });
+  if (res.status === 416) return; // диапазон невалиден — файл уже целиком
+  if (!res.ok && res.status !== 206) throw new Error("HTTP " + res.status);
+  const resuming = res.status === 206;
+  if (!resuming) start = 0; // сервер не поддержал докачку — пишем с нуля
+  const total = Number(res.headers.get("content-length") || 0) + start;
+  const file = fs.createWriteStream(dest, { flags: resuming ? "a" : "w" });
   const reader = res.body.getReader();
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    received += value.length;
-    file.write(Buffer.from(value));
-    if (onProgress) onProgress(total ? received / total : 0, received, total);
+  let received = start;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.length;
+      file.write(Buffer.from(value));
+      if (onProgress) onProgress(total ? received / total : 0, received, total);
+    }
+  } finally {
+    await new Promise((r) => file.end(r)); // частичное сохраняем для докачки
   }
-  await new Promise((r) => file.end(r));
 }
 
 // bash-скрипт, который ждёт закрытия приложения, подменяет .app и перезапускает
