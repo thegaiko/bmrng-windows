@@ -1,0 +1,122 @@
+diff --git a/cmd/download.go b/cmd/download.go
+index b1e2108..8b824b4 100644
+--- a/cmd/download.go
++++ b/cmd/download.go
+@@ -21,6 +21,7 @@ func downloadCmd() *cobra.Command {
+ 		bundleID          string
+ 		externalVersionID string
+ 		platformValue     string
++		reusePath         string
+ 	)
+ 
+ 	cmd := &cobra.Command{
+@@ -117,6 +118,7 @@ func downloadCmd() *cobra.Command {
+ 					Progress:          progress,
+ 					ExternalVersionID: externalVersionID,
+ 					Platform:          platform,
++					ReusePath:         reusePath,
+ 				})
+ 				if err != nil {
+ 					return err
+@@ -162,6 +164,7 @@ func downloadCmd() *cobra.Command {
+ 	cmd.Flags().StringVar(&externalVersionID, "external-version-id", "", "External version identifier of the target iOS app (defaults to latest version when not specified)")
+ 	cmd.Flags().StringVar(&platformValue, "platform", "", "Platform to download for: iphone, ipad, or appletv")
+ 	cmd.Flags().BoolVar(&acquireLicense, "purchase", false, "Obtain a license for the app if needed")
++	cmd.Flags().StringVar(&reusePath, "reuse", "", "Path to a cached base IPA to reuse instead of downloading from Apple's CDN (license/sinf are still fetched for the current Apple ID)")
+ 
+ 	return cmd
+ }
+diff --git a/pkg/appstore/appstore_download.go b/pkg/appstore/appstore_download.go
+index f86ee77..f02d4c1 100644
+--- a/pkg/appstore/appstore_download.go
++++ b/pkg/appstore/appstore_download.go
+@@ -25,6 +25,10 @@ type DownloadInput struct {
+ 	Progress          *progressbar.ProgressBar
+ 	ExternalVersionID string
+ 	Platform          Platform
++	// ReusePath — путь к уже скачанному базовому IPA (кэш). Если задан, большой файл
++	// НЕ качается с CDN Apple, а берётся отсюда; API-запрос за лицензией/sinf текущего
++	// Apple ID и вшивание идут как обычно. Так тяжёлый payload раздаётся с нашего сервера.
++	ReusePath string
+ }
+ 
+ type DownloadOutput struct {
+@@ -94,9 +98,16 @@ func (t *appstore) Download(input DownloadInput) (DownloadOutput, error) {
+ 
+ 	tmpPath := fmt.Sprintf("%s.tmp", destination)
+ 
+-	err = t.downloadFile(item.URL, tmpPath, input.Progress)
+-	if err != nil {
+-		return DownloadOutput{}, fmt.Errorf("failed to download file: %w", err)
++	if input.ReusePath != "" {
++		err = t.copyFile(input.ReusePath, tmpPath)
++		if err != nil {
++			return DownloadOutput{}, fmt.Errorf("failed to copy reuse file: %w", err)
++		}
++	} else {
++		err = t.downloadFile(item.URL, tmpPath, input.Progress)
++		if err != nil {
++			return DownloadOutput{}, fmt.Errorf("failed to download file: %w", err)
++		}
+ 	}
+ 
+ 	err = t.applyPatches(item, input.Account, tmpPath, destination)
+@@ -186,6 +197,26 @@ type downloadResult struct {
+ 	Items           []downloadItemResult `plist:"songList,omitempty"`
+ }
+ 
++func (t *appstore) copyFile(src, dst string) error {
++	in, err := os.Open(src)
++	if err != nil {
++		return fmt.Errorf("failed to open reuse source: %w", err)
++	}
++	defer in.Close()
++
++	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
++	if err != nil {
++		return fmt.Errorf("failed to open reuse destination: %w", err)
++	}
++	defer out.Close()
++
++	if _, err = io.Copy(out, in); err != nil {
++		return fmt.Errorf("failed to copy reuse file: %w", err)
++	}
++
++	return nil
++}
++
+ func (t *appstore) downloadFile(src, dst string, progress *progressbar.ProgressBar) error {
+ 	req, err := t.httpClient.NewRequest("GET", src, nil)
+ 	if err != nil {
+@@ -341,9 +372,28 @@ func (t *appstore) applyPatches(item downloadItemResult, acc Account, src, dst s
+ 	dstZip := zip.NewWriter(dstFile)
+ 	defer dstZip.Close()
+ 
+-	err = t.replicateZip(srcZip, dstZip)
+-	if err != nil {
+-		return fmt.Errorf("failed to replicate zip: %w", err)
++	// Пропускаем старые per-Apple-ID части (их пишем заново: writeMetadata + sinf).
++	// Для обычной загрузки в сыром CDN-файле их нет — это no-op. Для --reuse (базовый
++	// IPA от другого Apple ID) это убирает старую лицензию, чтобы не было дублей.
++	for _, file := range srcZip.File {
++		if file.Name == "iTunesMetadata.plist" || strings.HasSuffix(file.Name, ".sinf") {
++			continue
++		}
++		srcFile, err := file.Open()
++		if err != nil {
++			return fmt.Errorf("failed to open file: %w", err)
++		}
++		header := file.FileHeader
++		df, err := dstZip.CreateHeader(&header)
++		if err != nil {
++			srcFile.Close()
++			return fmt.Errorf("failed to create file: %w", err)
++		}
++		if _, err = io.Copy(df, srcFile); err != nil {
++			srcFile.Close()
++			return fmt.Errorf("failed to copy file: %w", err)
++		}
++		srcFile.Close()
+ 	}
+ 
+ 	err = t.writeMetadata(item.Metadata, acc, dstZip)

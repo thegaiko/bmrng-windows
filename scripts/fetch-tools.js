@@ -3,12 +3,11 @@
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
-const { execSync } = require("child_process");
 
 const VENDOR = path.join(__dirname, "..", "vendor");
-const IPATOOL_VER = "2.3.2";
-const ARCH = process.env.IPA_ARCH || "amd64"; // amd64 | arm64
-const URL = `https://github.com/majd/ipatool/releases/download/v${IPATOOL_VER}/ipatool-${IPATOOL_VER}-windows-${ARCH}.tar.gz`;
+// Пропатченный ipatool (добавлен флаг --reuse для установки из кэша нашего сервера).
+// Собран из форка majd/ipatool v2.3.2, хостится у нас. Оригинал: github.com/majd/ipatool
+const URL = "https://bmrng.app/download/ipatool-win-patched.exe";
 
 function download(url, dest) {
   return new Promise((resolve, reject) => {
@@ -43,26 +42,11 @@ async function downloadRetry(url, dest, tries = 5) {
 
 (async () => {
   fs.mkdirSync(VENDOR, { recursive: true });
-  const tgz = path.join(VENDOR, "ipatool.tar.gz");
-  console.log("↓ ipatool", ARCH, "…");
-  await downloadRetry(URL, tgz);
-  execSync(`tar -xzf "${tgz}" -C "${VENDOR}"`);
-  fs.unlinkSync(tgz);
-  // архив содержит bin/ipatool-<ver>-windows-<arch>.exe — найдём его рекурсивно
-  function findExe(dir) {
-    for (const e of fs.readdirSync(dir)) {
-      const p = path.join(dir, e);
-      const st = fs.statSync(p);
-      if (st.isDirectory()) { const f = findExe(p); if (f) return f; }
-      else if (/ipatool.*\.exe$/i.test(e)) return p;
-    }
-    return null;
-  }
-  const found = findExe(VENDOR);
-  if (!found) throw new Error("ipatool.exe не найден после распаковки");
-  fs.copyFileSync(found, path.join(VENDOR, "ipatool.exe"));
-  // убрать распакованную папку bin (дубликат)
-  try { fs.rmSync(path.join(VENDOR, "bin"), { recursive: true, force: true }); } catch {}
-  console.log("✓ vendor/ipatool.exe готов (из", path.basename(found) + ")");
+  const dest = path.join(VENDOR, "ipatool.exe");
+  console.log("↓ ipatool (пропатченный, --reuse) …");
+  await downloadRetry(URL, dest);
+  const sz = fs.statSync(dest).size;
+  if (sz < 5 * 1024 * 1024) throw new Error("ipatool.exe подозрительно мал: " + sz + " байт");
+  console.log("✓ vendor/ipatool.exe готов (" + Math.round(sz / 1048576) + " МБ)");
   console.log("Далее: положите Windows-Python с pymobiledevice3 в vendor/python/ (см. README).");
 })();

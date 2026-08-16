@@ -351,18 +351,22 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
   // предупреждение о нехватке места (частая причина «not a valid zip» на больших приложениях)
   const freeAtStart = freeBytes(os.tmpdir());
   if (freeAtStart != null && freeAtStart < 2 * 1024 ** 3) {
-    send({ line: `⚠ Мало места на диске (~${(freeAtStart / 1024 ** 3).toFixed(1)} ГБ). Для установки нужно 1–2 ГБ свободно.` });
+    send({ line: `⚠ Мало места на диске (~${(freeAtStart / 1024 ** 3).toFixed(1)} ГБ свободно). Для установки нужно 1–2 ГБ. Возможно, файл не докачается.` });
   }
-  // поллинг размера скачиваемого файла → прогресс в МБ
+  // поллинг размера скачиваемого файла → прогресс в МБ. Запоминаем ПИКОВЫЙ размер:
+  // ipatool при провале удаляет .tmp, и потом узнать, сколько скачалось, уже нельзя.
+  let peakBytes = 0;
   const dlPoll = setInterval(() => {
     let sz = 0;
     for (const f of [ipaFile, ipaFile + ".tmp"]) { try { sz += fs.statSync(f).size; } catch {} }
+    if (sz > peakBytes) peakBytes = sz;
     if (sz > 0) send({ phase: "download", app: app.name, bytes: sz });
   }, 400);
   let ok = false; let lastOut = ""; let allOut = ""; let usedIndex = -1; let needLicense = false; let lastBadSize = null;
-  let usedProxy = false;
+  let usedProxy = false; let usedCache = false;
   // если у пользователя рвётся прямая загрузка — эскалируем на загрузку через наш сервер
   const proxyEnv = await getProxyEnv();
+  const cacheManifest = await getCacheManifest();
   const RESET_RX = /not a valid zip|apply patches|zip reader|unexpected eof|connection reset|reset by peer|timeout|eof/i;
   const NET_RX = /failed to send http request|i\/o timeout|no such host|dial tcp|connection refused|round trip|tls handshake|network is unreachable|context deadline|lookup [^ ]*apple|proxyconnect/i;
   // Проход 1: ТОЛЬКО download (без --purchase). Скачивает уже купленное приложение
@@ -371,10 +375,35 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     const sel = sels[i];
     if (sels.length > 1) send({ line: `Вариант ${i + 1}/${sels.length}…` });
     let r = null; let good = false;
+    // Фаза КЭША: если приложение есть в нашем кэше — качаем большой файл с нашего
+    // сервера (стабильно, минуя падающий CDN Apple) и собираем через --reuse: к Apple
+    // идёт только лёгкий запрос за лицензией текущего Apple ID.
+    const appId = sel[0] === "-i" ? String(sel[1]) : null;
+    const cached = appId && cacheManifest && cacheManifest[appId];
+    if (cached && cached.file && cached.evid) {
+      const basePath = ipaFile + ".base";
+      try {
+        send({ line: "Загрузка с нашего сервера…" });
+        try { fs.unlinkSync(basePath); } catch {}
+        await downloadFile(`https://bmrng.app/cache/${cached.file}`, basePath, (_f, received) => {
+          if (received > 0) send({ phase: "download", app: app.name, bytes: received });
+        });
+        if (cancelRequested) { clearInterval(dlPoll); try { fs.unlinkSync(basePath); } catch {} return cancelled(); }
+        if (isValidZip(basePath)) {
+          send({ line: "Готовим установку…" });
+          try { fs.unlinkSync(ipaFile); } catch {}
+          r = await run(tool, ipa(["download", "-i", appId, "--external-version-id", String(cached.evid), "--reuse", basePath, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true });
+          allOut += "\n" + (r.out || "");
+          if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { good = true; usedIndex = i; usedCache = true; }
+        }
+      } catch (e) { allOut += "\ncache: " + String(e); }
+      try { fs.unlinkSync(basePath); } catch {}
+      if (good) { ok = true; lastOut = r.out; break; }
+    }
     // сначала напрямую (3 попытки); при обрыве/повреждении — через наш сервер (2 попытки)
     const phases = [{ env: {}, tries: 3, proxy: false }];
     if (proxyEnv) phases.push({ env: proxyEnv, tries: 2, proxy: true });
-    let escalate = true;
+    let escalate = !good;
     for (const ph of phases) {
       if (!escalate) break;
       for (let attempt = 1; attempt <= ph.tries; attempt++) {
@@ -431,12 +460,26 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     const corrupt = !notOwned && !netError && /not a valid zip|replicate|apply patches|zip reader|unexpected eof/i.test(allOut);
     const fb = freeBytes(os.tmpdir());
     const freeGB = fb != null ? +(fb / 1024 ** 3).toFixed(1) : null;
-    const badMB = lastBadSize != null ? Math.round(lastBadSize / 1048576) : null;
-    if (corrupt && badMB != null) send({ line: `диагностика: скачалось ${badMB} МБ, файл невалиден` });
+    // сколько РЕАЛЬНО скачалось: пик поллинга (ipatool чистит .tmp при провале, поэтому
+    // остаток на диске обманывает — раньше показывал «0 МБ», хотя качалось много).
+    const peakMB = Math.round(peakBytes / 1048576);
+    const badMB = Math.round(Math.max(lastBadSize || 0, peakBytes) / 1048576) || null;
+    // «диск заполнился»: явная ошибка записи, ИЛИ что-то скачалось, но места почти нет.
+    // ipatool при вшивании лицензии копирует IPA → нужно ~2× размера приложения.
+    const diskErr = /no space left|not enough space|disk full|cannot write|write failed|enospc/i.test(allOut);
+    const diskFull = !notOwned && (diskErr || (fb != null && fb < 700 * 1024 ** 2 && peakMB > 50));
+    // ДИАГНОСТИКА в журнал: реальный объём загрузки, место, и сырая ошибка ipatool —
+    // без этого причину «повреждается» установить нельзя.
+    if (!notOwned) {
+      send({ line: `диагностика: скачалось ~${peakMB} МБ, свободно ${freeGB != null ? freeGB + " ГБ" : "?"}` });
+      const rawErr = String((lastJSON(lastOut) || {}).error || err || "").replace(/\s+/g, " ").slice(0, 160);
+      if (rawErr) send({ line: `ipatool: ${rawErr}` });
+    }
     send({ phase: "error", line: notOwned ? `✗ «${app.name}» не в покупках этого Apple ID`
+      : diskFull ? `✗ «${app.name}»: не хватило места на диске (нужно ~1–2 ГБ свободно)`
       : netError ? `✗ «${app.name}»: нет связи с серверами Apple`
       : corrupt ? `✗ «${app.name}»: файл повреждается при загрузке` : `✗ ${err}` });
-    return { ok: false, error: err, notOwned, corrupt, netError, freeGB, badMB, total: sels.length, triedFrom: start };
+    return { ok: false, error: err, notOwned, corrupt, netError, diskFull, freeGB, badMB, peakMB, total: sels.length, triedFrom: start };
   }
   // bundle id из IPA — чтобы после установки убедиться, что приложение реально появилось на телефоне
   let bundleId = "";
@@ -548,6 +591,21 @@ async function getProxyEnv() {
   } catch {}
   _proxyCache = { at: Date.now(), env };
   return env;
+}
+
+// Манифест кэша: какие приложения раздаём базой с нашего сервера (тяжёлый payload —
+// с bmrng.app, к Apple только лёгкий запрос за лицензией). { "<appId>": {file, evid, version} }
+const CACHE_MANIFEST_URL = "https://bmrng.app/cache/manifest.json";
+let _cacheManifest = { at: 0, apps: null };
+async function getCacheManifest() {
+  if (Date.now() - _cacheManifest.at < 300000) return _cacheManifest.apps;
+  let apps = null;
+  try {
+    const res = await fetch(CACHE_MANIFEST_URL, { cache: "no-store" });
+    if (res.ok) { const d = await res.json(); apps = (d && d.apps) || null; }
+  } catch {}
+  _cacheManifest = { at: Date.now(), apps };
+  return apps;
 }
 
 function cmpVersions(a, b) {

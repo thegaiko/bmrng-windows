@@ -1,7 +1,7 @@
 {
   "name": "bmrng",
   "productName": "bmrng",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "description": "Возвращаем приложения на iPhone — Windows-версия",
   "main": "main.js",
   "author": "bmrng",
@@ -10,7 +10,8 @@
     "fetch-tools": "node scripts/fetch-tools.js",
     "dist": "electron-builder --win --publish never",
     "dist:portable": "electron-builder --win portable --publish never",
-    "dist:mac": "electron-builder --mac --publish never"
+    "dist:mac": "electron-builder --mac --publish never",
+    "build:mac": "bash scripts/build-mac.sh"
   },
   "devDependencies": {
     "electron": "^31.7.7",

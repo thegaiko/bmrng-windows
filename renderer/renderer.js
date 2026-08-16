@@ -372,7 +372,7 @@ async function tryNextVersion(app) {
     setBar(0, "Не удалось");
     if (r.notOwned) showNotOwnedModal([app.name]);
     else if (r.notInstalled) showNotInstalledModal([app.name]);
-    else if (r.corrupt || r.netError) showCorruptModal([{ name: app.name, freeGB: r.freeGB, badMB: r.badMB, netError: r.netError }]);
+    else if (r.corrupt || r.netError || r.diskFull) showCorruptModal([{ name: app.name, freeGB: r.freeGB, badMB: r.badMB, netError: r.netError, diskFull: r.diskFull }]);
   }
   setBusyMain(false); renderApps(); updateInstallBtn();
   setTimeout(() => showProgress(false), 3000);
@@ -393,7 +393,7 @@ function showNotInstalledModal(names) {
 function showCorruptModal(items) {
   const names = items.map((x) => x.name);
   const net = items.some((x) => x.netError);
-  const lowDisk = items.some((x) => x.freeGB != null && x.freeGB < 2);
+  const lowDisk = items.some((x) => x.diskFull) || items.some((x) => x.freeGB != null && x.freeGB < 2);
   const freeGB = items.map((x) => x.freeGB).find((g) => g != null);
   const badMB = items.map((x) => x.badMB).find((m) => m != null);
   $("#corrupt-list").textContent = names.length === 1 ? `«${names[0]}»` : names.map((n) => `«${n}»`).join(", ");
@@ -403,9 +403,9 @@ function showCorruptModal(items) {
     $("#corrupt-msg").textContent = "Приложение не может связаться с серверами загрузки Apple (iTunes). Проверьте интернет. Если вы в России — включите или смените VPN (серверы Apple часто недоступны без него). Можно также сменить DNS на 1.1.1.1 или 8.8.8.8. Затем повторите.";
     diskEl.textContent = ""; diskEl.style.color = "var(--dim)";
   } else if (lowDisk) {
-    $("#corrupt-title").textContent = "Файл повреждается при загрузке";
-    $("#corrupt-msg").textContent = "На диске мало места — приложению нужно 1–2 ГБ свободно (при установке файл копируется). Освободите место и попробуйте снова.";
-    diskEl.textContent = freeGB != null ? `Сейчас свободно: ${freeGB} ГБ.` : "";
+    $("#corrupt-title").textContent = "Не хватает места на диске";
+    $("#corrupt-msg").textContent = "Загрузка обрывается из-за нехватки места: при установке файл копируется, поэтому нужно 1–2 ГБ свободного места. Освободите место на диске (корзина, загрузки, кэш) и попробуйте снова.";
+    diskEl.textContent = (freeGB != null ? `Сейчас свободно: ${freeGB} ГБ. ` : "") + (badMB != null ? `Успело скачаться: ${badMB} МБ.` : "");
     diskEl.style.color = "var(--danger)";
   } else {
     $("#corrupt-title").textContent = "Файл повреждается при загрузке";
@@ -588,9 +588,9 @@ async function installList(list) {
     } else if (r.notInstalled) {
       notInstalled.push(list[i].name);
       log(`  ✗ не появилось на телефоне — баланс не списан`);
-    } else if (r.corrupt || r.netError) {
-      corrupt.push({ name: list[i].name, freeGB: r.freeGB, badMB: r.badMB, netError: r.netError });
-      log(r.netError ? `  ✗ нет связи с серверами Apple` : `  ✗ файл повреждается при загрузке`);
+    } else if (r.corrupt || r.netError || r.diskFull) {
+      corrupt.push({ name: list[i].name, freeGB: r.freeGB, badMB: r.badMB, netError: r.netError, diskFull: r.diskFull });
+      log(r.netError ? `  ✗ нет связи с серверами Apple` : r.diskFull ? `  ✗ не хватило места на диске` : `  ✗ файл повреждается при загрузке`);
     }
   }
   showCancel(false);
