@@ -33,6 +33,18 @@ swap_and_build() {
   find vendor/python -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
   find vendor/python -name '*.pyc' -delete 2>/dev/null || true
 
+  # ipatool ТОЖЕ под арку: x86_64 ipatool на Apple Silicon без Rosetta даёт EBADARCH(-86)
+  # при запуске (вход в Apple ID не проходит). arm64-сборка обязана нести arm64-ipatool.
+  local ipa="build-ipatool/ipatool-$arch"
+  if [[ ! -x "$ipa" ]]; then
+    echo "✗ Нет $ipa — положи туда пропатченный ipatool под $arch (см. OPERATIONS.md)"; exit 1
+  fi
+  cp "$ipa" vendor/ipatool
+  chmod +x vendor/ipatool
+  local ia iwant; ia=$(file vendor/ipatool | grep -o 'arm64\|x86_64' || true)
+  [[ "$arch" == arm64 ]] && iwant=arm64 || iwant=x86_64
+  [[ "$ia" == "$iwant" ]] || { echo "✗ ipatool арки '$ia', ожидалась '$iwant'"; exit 1; }
+
   # проверка архитектуры python перед долгой сборкой
   local got want
   got=$(file vendor/python/bin/python3.12 2>/dev/null | grep -o 'arm64\|x86_64' || true)
