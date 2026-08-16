@@ -265,22 +265,32 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   // не вошли — нужен ли 2FA-код?
   const needs = low.includes("code") || low.includes("2fa") || low.includes("two-factor") ||
                 low.includes("verification") || low.includes("configurator") || low.includes("otp");
-  // без кода и есть признаки 2FA (или краш на приглашении) → показываем поле для кода
+  // без кода и есть признаки 2FA (или краш на приглашении) → показываем поле для кода.
+  // ВАЖНО: Apple на неверный пароль (при 2FA) отвечает так же, как «нужен код».
   if (!code && (needs || crashed)) return { ok: false, needCode: true, raw };
+
+  const invalidCreds = /-5000|invalid credential|incorrect password|password (is )?(incorrect|invalid)|wrong password/i.test(low);
+  const generic = /something went wrong|unknown error|an unknown error|please try again|try again later/i.test(low);
 
   // Чистое сообщение — без Go-стектрейса / сырых HTTP-кодов в интерфейсе
   let err = (lastJSON(r.out) || {}).error;
-  if (appleAuthGlitch(r.out)) {
-    err = "Серверы Apple сейчас не отвечают на вход (временная проблема на стороне Apple). Попробуйте через несколько минут, смените сеть или VPN-сервер.";
-  } else if (/something went wrong|unknown error|an unknown error|please try again|try again later/i.test(low)) {
-    // дженерик-ответ Apple/ipatool — часто проходит со второй попытки
-    err = "Apple не пустил с первой попытки. Нажмите «Войти» ещё раз — обычно получается со второго раза. Если не помогает — подождите пару минут или смените сеть.";
+  if (netFail(r.out) || r.timedOut) {
+    err = "Обрыв связи с серверами Apple при входе. Проверьте интернет и попробуйте войти ещё раз.";
+  } else if (appleAuthGlitch(r.out)) {
+    err = "Серверы Apple сейчас не отвечают на вход (временная проблема на стороне Apple). Попробуйте через пару минут или смените сеть.";
+  } else if (code && (needs || invalidCreds || generic || crashed)) {
+    // Код ввели, но вход не прошёл → почти всегда НЕВЕРНЫЙ ПАРОЛЬ (или неверный код).
+    err = "Вход не удался. Скорее всего, неверный пароль — проверьте его (регистр букв и раскладка клавиатуры) и введите заново. Если пароль точно верный, запросите новый код и повторите.";
+  } else if (invalidCreds) {
+    err = "Неверный Apple ID или пароль. Проверьте данные (регистр букв, раскладка) и попробуйте снова.";
+  } else if (generic) {
+    err = "Apple не пустил с первой попытки. Нажмите «Войти» ещё раз — обычно получается со второго раза. Если не помогает — подождите пару минут.";
   } else if (!err || crashed) {
     err = crashed
-      ? "Не удалось войти. Если включена двухфакторная аутентификация — введите код с ваших устройств Apple. Иначе проверьте Apple ID и пароль."
+      ? "Не удалось войти. Введите код с ваших устройств Apple и проверьте, что пароль верный."
       : (raw || "Не удалось войти");
   }
-  return { ok: false, error: String(err).slice(0, 220), raw };
+  return { ok: false, error: String(err).slice(0, 240), raw };
 });
 
 ipcMain.handle("account-logout", async () => { await run(ipatoolPath(), ipa(["auth", "revoke"])); return true; });

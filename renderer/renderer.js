@@ -494,13 +494,32 @@ function wireMain() {
     $("#id-modal").hidden = true;
     installList([{ key: "id" + id, name: "App Store ID " + id, appIDs: [id] }]);
   };
-  $("#profile").onclick = () => {
+  $("#profile").onclick = async () => {
     $("#profile-big-ava").textContent = (state.cfg.name || "b")[0].toUpperCase();
     $("#profile-big-name").textContent = state.cfg.name || "Профиль";
     $("#profile-big-email").textContent = state.cfg.email || "";
+    $("#update-status").textContent = "";
     $("#profile-modal").hidden = false;
+    try { $("#profile-version").textContent = "Версия " + (await api.appVersion()); } catch {}
   };
   $("#profile-close").onclick = () => ($("#profile-modal").hidden = true);
+  $("#check-updates").onclick = async () => {
+    const st = $("#update-status");
+    st.textContent = "Проверяю обновления…";
+    try {
+      const r = await api.checkUpdate();
+      if (r && r.available) {
+        $("#profile-modal").hidden = true;
+        updateInfo = r;
+        $("#upd-ver").textContent = `Версия ${r.version} · у вас ${r.current}`;
+        $("#upd-notes").textContent = r.notes || "";
+        $("#update-modal").hidden = false;
+        wireUpdate();
+      } else {
+        st.textContent = "У вас последняя версия ✓";
+      }
+    } catch { st.textContent = "Не удалось проверить обновления"; }
+  };
   $("#topup").onclick = openTopup;
   $("#tu-close").onclick = () => ($("#topup-modal").hidden = true);
   document.querySelectorAll(".tu-opt").forEach((b) => (b.onclick = () => setTuQty(Number(b.dataset.q), false)));
@@ -537,7 +556,7 @@ async function doAppleLogin() {
   if (r.ok) { $("#appleid-modal").hidden = true; log("✓ Вход выполнен"); refreshAccount(); return; }
   if (r.needCode) {
     $("#ai-code").hidden = false; setTimeout(() => $("#ai-code").focus(), 50);
-    $("#ai-error").textContent = "Код отправлен на ваши устройства Apple — введите его сюда";
+    $("#ai-error").innerHTML = "Введите код с ваших устройств Apple. <b>Если код не приходит — скорее всего неверный пароль</b> (проверьте регистр букв и раскладку).";
     log("Требуется код 2FA — показываю поле");
     return;
   }
