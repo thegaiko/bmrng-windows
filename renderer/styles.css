@@ -42,6 +42,17 @@ button{font-family:inherit;cursor:pointer}
 .dots span.on{width:20px;background:var(--accent)}
 .back{align-self:flex-start;color:var(--faint);background:none;border:none;font-size:14px;font-weight:600}
 
+/* ── баннер драйвера Apple (Windows) ── */
+.itunes-banner{display:flex;align-items:center;gap:14px;margin:12px 20px 0;padding:12px 14px;background:rgba(183,121,31,.1);border:1px solid rgba(183,121,31,.32);border-radius:14px}
+.itunes-banner .ib-ico{flex:none;width:26px;height:26px;border-radius:99px;background:var(--warn);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px}
+.itunes-banner .ib-text{display:flex;flex-direction:column;gap:2px;line-height:1.35;flex:1;min-width:0}
+.itunes-banner .ib-text b{font-size:14px;color:var(--ink)}
+.itunes-banner .ib-text span{font-size:12.5px;color:var(--dim)}
+.itunes-banner .ib-btn{flex:none;background:var(--warn);color:#fff;border:none;border-radius:10px;font-weight:700;font-size:13.5px;padding:9px 18px;transition:filter .15s,transform .1s}
+.itunes-banner .ib-btn:hover{filter:brightness(1.08)} .itunes-banner .ib-btn:active{transform:scale(.97)}
+.itunes-banner .ib-close{flex:none;background:none;border:none;color:var(--faint);font-size:20px;width:26px;height:26px;line-height:1}
+.itunes-banner .ib-close:hover{color:var(--dim)}
+
 /* ── шапка ── */
 .hd{display:flex;align-items:center;justify-content:space-between;padding:16px 20px}
 .brand{display:flex;align-items:center;gap:10px}.brand-ico{width:30px;height:30px;border-radius:8px}

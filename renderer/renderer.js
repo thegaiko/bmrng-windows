@@ -93,8 +93,19 @@ function showApp() {
   refreshAccount();
   refreshDevices();
   refreshBalance();
+  checkItunes();
   setInterval(() => { if (!state.busy) refreshDevices(); }, 3000);
   wireMain();
+}
+
+// на Windows проверяем драйвер Apple Mobile Device (нужен для связи с iPhone)
+async function checkItunes() {
+  const banner = $("#itunes-banner");
+  if (!banner) return;
+  try {
+    const r = await api.checkItunes();
+    banner.hidden = !(r && r.needed && !r.installed);
+  } catch { banner.hidden = true; }
 }
 
 async function refreshBalance() {
@@ -360,6 +371,7 @@ async function tryNextVersion(app) {
     else log(`✗ ${r.error || "не удалось установить эту версию"}`);
     setBar(0, "Не удалось");
     if (r.notOwned) showNotOwnedModal([app.name]);
+    else if (r.notInstalled) showNotInstalledModal([app.name]);
     else if (r.corrupt || r.netError) showCorruptModal([{ name: app.name, freeGB: r.freeGB, badMB: r.badMB, netError: r.netError }]);
   }
   setBusyMain(false); renderApps(); updateInstallBtn();
@@ -371,6 +383,11 @@ function showNotOwnedModal(names) {
   const list = $("#notowned-list");
   list.textContent = names.length === 1 ? `«${names[0]}»` : names.map((n) => `«${n}»`).join(", ");
   $("#notowned-modal").hidden = false;
+}
+
+function showNotInstalledModal(names) {
+  $("#notinstalled-list").textContent = names.length === 1 ? `«${names[0]}»` : names.map((n) => `«${n}»`).join(", ");
+  $("#notinstalled-modal").hidden = false;
 }
 
 function showCorruptModal(items) {
@@ -429,6 +446,7 @@ async function refreshDevices() {
   } else {
     phone.className = "phone off"; status.textContent = "iPhone не подключён";
     if (!state.busy) scr.innerHTML = "Подключите<br>iPhone по USB";
+    if (!$("#itunes-banner").hidden || state.itunesChecked !== true) { state.itunesChecked = true; checkItunes(); }
   }
   if (state.devices.length > 1) {
     sel.hidden = false; sel.innerHTML = state.devices.map((d) => `<option value="${d.udid}">${d.name}</option>`).join("");
@@ -461,8 +479,11 @@ function wireMain() {
   $("#btn-support").onclick = () => api.openExternal("https://t.me/metagaiko");
   $("#notowned-ok").onclick = () => ($("#notowned-modal").hidden = true);
   $("#corrupt-ok").onclick = () => ($("#corrupt-modal").hidden = true);
+  $("#notinstalled-ok").onclick = () => ($("#notinstalled-modal").hidden = true);
   $("#foot-site").onclick = () => api.openExternal("https://bmrng.app");
   $("#foot-tg").onclick = () => api.openExternal("https://t.me/thegaiko");
+  $("#itunes-install").onclick = () => api.openExternal("https://www.apple.com/itunes/download/win64");
+  $("#itunes-dismiss").onclick = () => ($("#itunes-banner").hidden = true);
   $("#btn-log").onclick = () => ($("#log-modal").hidden = false);
   $("#log-close").onclick = () => ($("#log-modal").hidden = true);
   $("#add-id").onclick = () => { $("#id-input").value = ""; $("#id-modal").hidden = false; };
@@ -547,6 +568,7 @@ async function installList(list) {
   let done = 0;
   const notOwned = [];
   const corrupt = [];
+  const notInstalled = [];
   let cancelled = false;
   for (let i = 0; i < list.length; i++) {
     if (state.cancelInstall) { cancelled = true; break; }
@@ -563,6 +585,9 @@ async function installList(list) {
     } else if (r.notOwned) {
       notOwned.push(list[i].name);
       log(`  ✗ нет в покупках этого Apple ID`);
+    } else if (r.notInstalled) {
+      notInstalled.push(list[i].name);
+      log(`  ✗ не появилось на телефоне — баланс не списан`);
     } else if (r.corrupt || r.netError) {
       corrupt.push({ name: list[i].name, freeGB: r.freeGB, badMB: r.badMB, netError: r.netError });
       log(r.netError ? `  ✗ нет связи с серверами Apple` : `  ✗ файл повреждается при загрузке`);
@@ -580,6 +605,7 @@ async function installList(list) {
   }
   setBusyMain(false);
   if (notOwned.length && !cancelled) showNotOwnedModal(notOwned);
+  else if (notInstalled.length && !cancelled) showNotInstalledModal(notInstalled);
   else if (corrupt.length && !cancelled) showCorruptModal(corrupt);
   setTimeout(() => showProgress(false), 3000);
   setTimeout(refreshDevices, 2500);

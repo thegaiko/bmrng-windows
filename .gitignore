@@ -3,3 +3,4 @@ release/
 vendor/
 *.log
 .DS_Store
+build-python/

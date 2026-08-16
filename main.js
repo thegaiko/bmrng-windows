@@ -30,6 +30,26 @@ function machineId() {
 const isWin = process.platform === "win32";
 const API = "https://bmrng.app";
 
+// На Windows для связи с iPhone нужен драйвер Apple Mobile Device Support
+// (ставится с iTunes / «Apple Devices»). Без него usbmuxd нет — устройство не видно.
+function iTunesInstalled() {
+  if (process.platform !== "win32") return true; // macOS — не нужен
+  const dirs = [
+    path.join(process.env["CommonProgramFiles"] || "", "Apple", "Mobile Device Support"),
+    path.join(process.env["CommonProgramFiles(x86)"] || "", "Apple", "Mobile Device Support"),
+    path.join(process.env["ProgramFiles"] || "C:\\Program Files", "Common Files", "Apple", "Mobile Device Support"),
+    path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Common Files", "Apple", "Mobile Device Support"),
+  ];
+  for (const d of dirs) { try { if (d && fs.existsSync(d)) return true; } catch {} }
+  // запасной способ — служба Apple Mobile Device Service
+  try {
+    const out = execSync('sc query "Apple Mobile Device Service"', { encoding: "utf8", timeout: 4000 });
+    if (/STATE/i.test(out)) return true;
+  } catch {}
+  return false;
+}
+ipcMain.handle("check-itunes", async () => ({ needed: process.platform === "win32", installed: iTunesInstalled() }));
+
 // ── расположение вшитых инструментов ────────────────────────────
 function resDir() {
   return app.isPackaged ? process.resourcesPath : __dirname;
@@ -166,20 +186,30 @@ function selectors(app) {
 }
 
 // ── IPC: устройства / Apple ID ──────────────────────────────────
+let _lastUsbmuxRaw = "";
 ipcMain.handle("devices", async () => {
   const py = pythonBase();
-  const r = await run(py.cmd, [...py.pre, "usbmux", "list"]);
-  try {
-    const arr = JSON.parse(r.out.trim());
-    const seen = new Set(); const list = [];
-    for (const d of arr) {
-      if (d.ConnectionType !== "USB") continue;
-      const udid = d.Identifier || d.SerialNumber;
-      if (udid && !seen.has(udid)) { seen.add(udid); list.push({ udid, name: d.DeviceName || "iPhone" }); }
-    }
-    return list;
-  } catch { return []; }
+  let arr = [];
+  // 2 попытки: устройство может появиться через мгновение после подключения/доверия
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const r = await run(py.cmd, [...py.pre, "usbmux", "list"], { timeoutMs: 15000 });
+    _lastUsbmuxRaw = (r.out || "").trim().slice(0, 400);
+    try { arr = JSON.parse((r.out || "").trim()); } catch { arr = []; }
+    if (Array.isArray(arr) && arr.length) break;
+    if (attempt < 2) await new Promise((res) => setTimeout(res, 800));
+  }
+  const seen = new Set(); const list = [];
+  for (const d of (Array.isArray(arr) ? arr : [])) {
+    // берём всё, что НЕ Wi-Fi (USB и любые нестандартные метки ConnectionType)
+    const ct = String(d.ConnectionType || "").toLowerCase();
+    if (ct.includes("network") || ct.includes("wifi") || ct.includes("wi-fi")) continue;
+    const udid = d.Identifier || d.SerialNumber || d.UniqueDeviceID;
+    if (udid && !seen.has(udid)) { seen.add(udid); list.push({ udid, name: d.DeviceName || "iPhone" }); }
+  }
+  return list;
 });
+// сырой ответ usbmuxd для диагностики (кнопка/журнал)
+ipcMain.handle("usbmux-raw", async () => _lastUsbmuxRaw || "(пусто)");
 
 ipcMain.handle("account-info", async () => {
   const r = await run(ipatoolPath(), ipa(["auth", "info", "--format", "json", "--non-interactive"]));
@@ -192,17 +222,33 @@ ipcMain.handle("account-info", async () => {
 function appleAuthGlitch(out) {
   return /unexpected response from apple|non-plist|empty body|http 204|http 404|http 5\d\d|502 bad gateway|service unavailable/i.test(out || "");
 }
+// сетевая ошибка — не дозвонились до серверов Apple (DNS/DPI/обрыв). Не путать с
+// неверным паролем/2FA/глюком Apple: только при этом имеет смысл повтор через прокси.
+function netFail(out) {
+  return /failed to send http request|i\/o timeout|no such host|dial tcp|connection refused|round trip|tls handshake|network is unreachable|context deadline|lookup [^ ]*apple|proxyconnect|connection reset|reset by peer/i.test(out || "");
+}
 
 ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   const tool = ipatoolPath();
   const args = ["auth", "login", "-e", email, "-p", password, "--format", "json", "--non-interactive"];
   if (code) args.push("--auth-code", code);
-  // до 3 попыток на временные глюки auth-серверов Apple (204/404/5xx)
+  // Логин НЕ гоним через прокси по умолчанию: много разных Apple ID с одного IP
+  // сервера Apple воспринимает как подозрительный паттерн. Прокси — только fallback,
+  // когда прямой вход упал ИМЕННО из-за сети (не дозвонились до Apple).
+  const proxyEnv = await getProxyEnv();
+  const phases = [{ env: {}, proxy: false }];
+  if (proxyEnv) phases.push({ env: proxyEnv, proxy: true });
   let r;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    if (attempt > 1) await new Promise((res) => setTimeout(res, 1500));
-    r = await run(tool, ipa(args), { timeoutMs: 90000 });
-    if (!appleAuthGlitch(r.out) || r.timedOut) break;
+  for (const ph of phases) {
+    // до 3 попыток на временные глюки auth-серверов Apple (204/404/5xx)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (attempt > 1) await new Promise((res) => setTimeout(res, 1500));
+      r = await run(tool, ipa(args), { timeoutMs: 90000, env: ph.env });
+      if (!appleAuthGlitch(r.out) || r.timedOut) break;
+    }
+    const okNow = (lastJSON(r.out) || {}).success === true;
+    // к прокси эскалируем только при сетевом сбое; на успех/неверный пароль/2FA/глюк — нет
+    if (okNow || !(r.timedOut || netFail(r.out))) break;
   }
   const low = r.out.toLowerCase();
   const raw = (r.out || "").toString().trim().replace(/\s+/g, " ").slice(-360);
@@ -226,6 +272,9 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   let err = (lastJSON(r.out) || {}).error;
   if (appleAuthGlitch(r.out)) {
     err = "Серверы Apple сейчас не отвечают на вход (временная проблема на стороне Apple). Попробуйте через несколько минут, смените сеть или VPN-сервер.";
+  } else if (/something went wrong|unknown error|an unknown error|please try again|try again later/i.test(low)) {
+    // дженерик-ответ Apple/ipatool — часто проходит со второй попытки
+    err = "Apple не пустил с первой попытки. Нажмите «Войти» ещё раз — обычно получается со второго раза. Если не помогает — подождите пару минут или смените сеть.";
   } else if (!err || crashed) {
     err = crashed
       ? "Не удалось войти. Если включена двухфакторная аутентификация — введите код с ваших устройств Apple. Иначе проверьте Apple ID и пароль."
@@ -311,25 +360,38 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     if (sz > 0) send({ phase: "download", app: app.name, bytes: sz });
   }, 400);
   let ok = false; let lastOut = ""; let allOut = ""; let usedIndex = -1; let needLicense = false; let lastBadSize = null;
+  let usedProxy = false;
+  // если у пользователя рвётся прямая загрузка — эскалируем на загрузку через наш сервер
+  const proxyEnv = await getProxyEnv();
+  const RESET_RX = /not a valid zip|apply patches|zip reader|unexpected eof|connection reset|reset by peer|timeout|eof/i;
+  const NET_RX = /failed to send http request|i\/o timeout|no such host|dial tcp|connection refused|round trip|tls handshake|network is unreachable|context deadline|lookup [^ ]*apple|proxyconnect/i;
   // Проход 1: ТОЛЬКО download (без --purchase). Скачивает уже купленное приложение
   // через существующую сессию и НЕ вызывает подтверждений входа в Apple ID.
   for (let i = start; i < sels.length; i++) {
     const sel = sels[i];
     if (sels.length > 1) send({ line: `Вариант ${i + 1}/${sels.length}…` });
     let r = null; let good = false;
-    // до 3 попыток: большие приложения (Сбер ~300 МБ) часто докачиваются не полностью
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      if (attempt > 1) send({ line: `Файл повреждён, повтор загрузки (${attempt}/3)…` });
-      try { fs.unlinkSync(ipaFile); } catch {}
-      r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true });
-      if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
-      if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { good = true; break; }
-      // диагностика: размер битого файла (обрыв → маленький, подмена контента → полный размер)
-      try { const sz = fs.statSync(ipaFile).size; if (sz) lastBadSize = sz; } catch {}
-      // повторяем только повреждённую/оборванную загрузку; на «license required» и др. — сразу дальше
-      const corrupt = /not a valid zip|apply patches|zip reader|unexpected eof|connection reset|reset by peer|timeout|eof/i.test(r.out)
-                      || (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && !isValidZip(ipaFile));
-      if (!corrupt) break;
+    // сначала напрямую (3 попытки); при обрыве/повреждении — через наш сервер (2 попытки)
+    const phases = [{ env: {}, tries: 3, proxy: false }];
+    if (proxyEnv) phases.push({ env: proxyEnv, tries: 2, proxy: true });
+    let escalate = true;
+    for (const ph of phases) {
+      if (!escalate) break;
+      for (let attempt = 1; attempt <= ph.tries; attempt++) {
+        if (ph.proxy) send({ line: `Прямая загрузка не удалась — качаем через наш сервер (${attempt}/${ph.tries})…` });
+        else if (attempt > 1) send({ line: `Файл повреждён, повтор загрузки (${attempt}/3)…` });
+        try { fs.unlinkSync(ipaFile); } catch {}
+        r = await run(tool, ipa(["download", ...sel, "-o", ipaFile, "--format", "json", "--non-interactive"]), { track: true, env: ph.env });
+        if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
+        if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { good = true; usedProxy = ph.proxy; break; }
+        // диагностика: размер битого файла (обрыв → маленький, подмена контента → полный размер)
+        try { const sz = fs.statSync(ipaFile).size; if (sz) lastBadSize = sz; } catch {}
+        // повторяем/эскалируем только обрыв/повреждение/сеть; на «license required» и др. — сразу дальше
+        const corrupt = RESET_RX.test(r.out) || NET_RX.test(r.out)
+                        || (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && !isValidZip(ipaFile));
+        if (!corrupt) { escalate = false; break; }
+      }
+      if (good) break;
     }
     lastOut = r.out; allOut += "\n" + r.out;
     if (good) { ok = true; usedIndex = i; break; }
@@ -342,11 +404,20 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
   // подтверждениями по каждому чужому ID (и можно случайно получить не то приложение).
   if (!ok && needLicense && sels.length === 1) {
     send({ line: "Получаю лицензию…" });
-    const r = await run(tool, ipa(["download", ...sels[start], "-o", ipaFile, "--purchase", "--format", "json", "--non-interactive"]), { track: true });
-    if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
-    lastOut = r.out; allOut += "\n" + r.out;
-    if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { ok = true; usedIndex = start; }
-    else { try { fs.unlinkSync(ipaFile); } catch {} }
+    // напрямую, а при сетевом сбое — через наш сервер
+    const p2 = [{ env: {}, proxy: false }];
+    if (proxyEnv) p2.push({ env: proxyEnv, proxy: true });
+    for (const ph of p2) {
+      if (ph.proxy) send({ line: "Прямая загрузка не удалась — качаем через наш сервер…" });
+      try { fs.unlinkSync(ipaFile); } catch {}
+      const r = await run(tool, ipa(["download", ...sels[start], "-o", ipaFile, "--purchase", "--format", "json", "--non-interactive"]), { track: true, env: ph.env });
+      if (cancelRequested) { clearInterval(dlPoll); return cancelled(); }
+      lastOut = r.out; allOut += "\n" + r.out;
+      if (fs.existsSync(ipaFile) && (lastJSON(r.out) || {}).success && isValidZip(ipaFile)) { ok = true; usedIndex = start; usedProxy = ph.proxy; break; }
+      try { fs.unlinkSync(ipaFile); } catch {}
+      // на прокси эскалируем только при сетевой ошибке/обрыве
+      if (!ph.proxy && !(RESET_RX.test(r.out) || NET_RX.test(r.out))) break;
+    }
   }
   clearInterval(dlPoll);
   if (cancelRequested) return cancelled();
@@ -367,6 +438,18 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
       : corrupt ? `✗ «${app.name}»: файл повреждается при загрузке` : `✗ ${err}` });
     return { ok: false, error: err, notOwned, corrupt, netError, freeGB, badMB, total: sels.length, triedFrom: start };
   }
+  // bundle id из IPA — чтобы после установки убедиться, что приложение реально появилось на телефоне
+  let bundleId = "";
+  try {
+    const bp = await run(py.cmd, ["-c",
+      "import zipfile,plistlib,sys\n" +
+      "z=zipfile.ZipFile(sys.argv[1])\n" +
+      "c=[x for x in z.namelist() if x.startswith('Payload/') and x.endswith('.app/Info.plist') and x.count('/')==2]\n" +
+      "print(plistlib.loads(z.read(c[0])).get('CFBundleIdentifier','') if c else '')",
+      ipaFile], { timeoutMs: 20000 });
+    bundleId = ((bp.out || "").trim().split("\n").filter(Boolean).pop() || "").trim();
+  } catch {}
+
   send({ phase: "install", progress: 0, line: "Устанавливаю на iPhone…" });
   const ir = await run(py.cmd, [...py.pre, "apps", "install", ipaFile], {
     env: { PYMOBILEDEVICE3_UDID: udid },
@@ -378,9 +461,22 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
   });
   try { fs.unlinkSync(ipaFile); } catch {}
   if (cancelRequested) return cancelled();
-  if (ir.code === 0 || ir.out.includes("Installation succeed")) {
-    send({ phase: "done", progress: 1, line: "✓ Установлено" });
-    return { ok: true, usedIndex, total: sels.length };
+  const claimedOk = ir.code === 0 || ir.out.includes("Installation succeed");
+  if (claimedOk) {
+    // ПРОВЕРКА: реально ли приложение появилось на телефоне (защита «списали, а не встало»).
+    // Если сам список получить не удалось — не рискуем, доверяем установке (не создаём ложный провал).
+    let onDevice = true;
+    if (bundleId) {
+      const lst = await run(py.cmd, [...py.pre, "apps", "list"], { env: { PYMOBILEDEVICE3_UDID: udid }, timeoutMs: 30000 });
+      const listOk = lst.code === 0 && (lst.out || "").length > 20;
+      if (listOk) onDevice = lst.out.includes(bundleId);
+    }
+    if (onDevice) {
+      send({ phase: "done", progress: 1, line: "✓ Установлено" });
+      return { ok: true, usedIndex, total: sels.length };
+    }
+    send({ phase: "error", line: `✗ «${app.name}» не появилось на телефоне (установка не завершилась). Баланс не списан.` });
+    return { ok: false, error: "приложение не появилось на телефоне", notInstalled: true, bundleId, total: sels.length };
   }
   send({ phase: "error", line: "✗ ошибка установки" });
   return { ok: false, error: "install failed", total: sels.length };
@@ -432,6 +528,27 @@ ipcMain.handle("tools-ready", async () => ({
 
 // ── обновления ──────────────────────────────────────────────────
 const UPDATE_URL = "https://bmrng.app/download/version.json";
+
+// Прокси для трафика ipatool через наш сервер: если у пользователя рвётся прямая
+// загрузка с CDN Apple, повторяем через сервер (у него чистый маршрут до Apple).
+// Управляется с сервера: version.json → proxy {enabled, url}. Кэш 5 минут.
+let _proxyCache = { at: 0, env: null };
+async function getProxyEnv() {
+  if (Date.now() - _proxyCache.at < 300000) return _proxyCache.env;
+  let env = null;
+  try {
+    const res = await fetch(UPDATE_URL, { cache: "no-store" });
+    if (res.ok) {
+      const d = await res.json();
+      if (d.proxy && d.proxy.enabled && d.proxy.url) {
+        const u = d.proxy.url;
+        env = { HTTPS_PROXY: u, HTTP_PROXY: u, https_proxy: u, http_proxy: u };
+      }
+    }
+  } catch {}
+  _proxyCache = { at: Date.now(), env };
+  return env;
+}
 
 function cmpVersions(a, b) {
   const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);

@@ -21,6 +21,15 @@
 
 <!-- ОСНОВНОЕ -->
 <div id="app" hidden>
+  <div id="itunes-banner" class="itunes-banner" hidden>
+    <span class="ib-ico">!</span>
+    <div class="ib-text">
+      <b>Не установлен драйвер Apple</b>
+      <span>Чтобы приложение видело iPhone по USB, нужен драйвер Apple Mobile Device (входит в iTunes / «Apple Devices»).</span>
+    </div>
+    <button id="itunes-install" class="ib-btn">Установить</button>
+    <button id="itunes-dismiss" class="ib-close" title="Скрыть">×</button>
+  </div>
   <header class="hd">
     <div class="brand"><img src="../assets/icon.png" class="brand-ico"><span class="u">bmrng</span></div>
     <div class="hd-right">
@@ -188,6 +197,23 @@
     <div class="modal-actions col">
       <button id="notowned-ok" class="btn-primary">Понятно</button>
     </div>
+  </div>
+</div>
+
+<div id="notinstalled-modal" class="modal" hidden>
+  <div class="modal-card center">
+    <div class="upd-badge" style="background:rgba(183,121,31,.14);color:var(--warn)">!</div>
+    <b style="font-size:18px">Не появилось на телефоне</b>
+    <div id="notinstalled-list" class="muted" style="font-weight:600;color:var(--ink)"></div>
+    <div class="muted" style="text-align:left">Приложение установилось по протоколу, но на телефоне не появилось. <b style="color:var(--good)">Баланс не списан.</b><br><br>Что проверить:
+      <ul style="margin:8px 0 0;padding-left:20px;line-height:1.6">
+        <li>iPhone должен быть <b>разблокирован</b> во время установки;</li>
+        <li>на iPhone войдите в <b>тот же Apple ID</b>, что и в bmrng (Настройки → [имя] → «Медиа и покупки»);</li>
+        <li>загляните в <b>Библиотеку приложений</b> (свайп влево до конца) — иконка может быть там;</li>
+        <li>попробуйте установить ещё раз.</li>
+      </ul>
+    </div>
+    <div class="modal-actions col"><button id="notinstalled-ok" class="btn-primary">Понятно</button></div>
   </div>
 </div>
 
