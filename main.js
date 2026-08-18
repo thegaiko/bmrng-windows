@@ -82,14 +82,15 @@ function pythonBase() {
 let cancelRequested = false;
 const installChildren = new Set();
 
-function run(cmd, args, { env = {}, onData, timeoutMs, track } = {}) {
+function run(cmd, args, { env = {}, onData, timeoutMs, track, input } = {}) {
   return new Promise((resolve) => {
     let child;
     try { child = spawn(cmd, args, { env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...env } }); }
     catch (e) { return resolve({ code: -1, out: String(e) }); }
-    // Закрываем stdin: если инструмент вдруг ждёт интерактивный ввод (2FA/пароль) —
-    // получит EOF и завершится с ошибкой, а не зависнет навсегда (частая причина «вход… и ничего»).
-    try { child.stdin.end(); } catch {}
+    // Если нужно передать данные (например сессию для set-session) — пишем в stdin.
+    // Иначе закрываем stdin: инструмент, ждущий интерактивный ввод (2FA/пароль),
+    // получит EOF и завершится с ошибкой, а не зависнет навсегда.
+    try { if (input != null) { child.stdin.write(input); child.stdin.end(); } else { child.stdin.end(); } } catch {}
     if (track) installChildren.add(child);
     let out = ""; let done = false; let timer = null;
     const finish = (res) => { if (done) return; done = true; if (timer) clearTimeout(timer); if (track) installChildren.delete(child); resolve(res); };
@@ -228,13 +229,140 @@ function netFail(out) {
   return /failed to send http request|i\/o timeout|no such host|dial tcp|connection refused|round trip|tls handshake|network is unreachable|context deadline|lookup [^ ]*apple|proxyconnect|connection reset|reset by peer/i.test(out || "");
 }
 
+// GUID из MAC-адреса (как ipatool: первый непустой, uppercase, без двоеточий).
+function appleGuid() {
+  const ifs = os.networkInterfaces();
+  for (const n of Object.keys(ifs)) for (const a of ifs[n] || []) {
+    if (a.mac && a.mac !== "00:00:00:00:00:00") return a.mac.toUpperCase().replace(/:/g, "");
+  }
+  return "000000000000";
+}
+function plistStr(xml, key) {
+  const m = (xml || "").match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`, "i"));
+  return m ? m[1] : "";
+}
+// Cookie-jar для входа: Apple на 1-м запросе (пароль) ставит session-cookie (itspod и др.),
+// а 2-й запрос (пароль+код 2FA) обязан их нести — иначе Apple не связывает код с сессией
+// и отдаёт пустой ответ. Без этого 2FA-вход не проходил (принимали за «троттлинг»).
+const _authCookies = {}; // email → { name: value }
+function cookieHeader(key) {
+  const jar = _authCookies[key] || {};
+  return Object.keys(jar).map((k) => `${k}=${jar[k]}`).join("; ");
+}
+function storeCookies(key, res) {
+  const jar = _authCookies[key] || (_authCookies[key] = {});
+  const list = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
+  for (const c of list || []) {
+    const pair = c.split(";")[0]; const i = pair.indexOf("=");
+    if (i > 0) jar[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
+  }
+}
+// Нативный вход в Apple ID напрямую (без подпроцесса ipatool) — как в приложении Сбера:
+// один HTTPS-запрос authenticate. Быстро и без багов спавна/паники/keyring.
+async function appleNativeAuth(email, password, code) {
+  const guid = appleGuid();
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const pw = String(password) + String(code || "").replace(/\s+/g, "");
+  // Тело 1-в-1 как ipatool: attempt начинается с 1 (иначе Apple считает это повторной
+  // попыткой и НЕ пушит 2FA-код). Без createSession — ipatool его не шлёт.
+  const reqBody = (attempt) => `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>appleId</key><string>${esc(email)}</string>
+<key>attempt</key><string>${attempt}</string>
+<key>guid</key><string>${guid}</string>
+<key>password</key><string>${esc(pw)}</string>
+<key>rmp</key><string>0</string>
+<key>why</key><string>signIn</string>
+</dict></plist>`;
+  const jarKey = String(email).toLowerCase();
+  if (!code) _authCookies[jarKey] = {}; // вход без кода = новая сессия → свежие cookie
+  const doReq = async (attempt) => {
+    const headers = {
+      "User-Agent": "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6",
+      "Content-Type": "application/x-www-form-urlencoded",
+    };
+    const ch = cookieHeader(jarKey);
+    if (ch) headers["Cookie"] = ch; // 2-й запрос (с кодом) несёт cookie 1-го
+    const r = await fetch(`https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate?guid=${guid}`, {
+      method: "POST", headers, body: reqBody(attempt),
+    });
+    storeCookies(jarKey, r); // запоминаем session-cookie от Apple
+    return r;
+  };
+  // Вход ТОЛЬКО напрямую (через прокси Apple отдаёт 204 — auth из дата-центра не принимает).
+  // Ретраим ТОЛЬКО при обрыве сети (fetch кинул). НЕ долбим при 204/пустом ответе —
+  // это троттлинг Apple, и повторы его только усиливают.
+  let res, text, netErr = false, throttled = false;
+  for (let i = 0; i < 3; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 2000));
+    try {
+      res = await doReq(1); text = await res.text();
+      if (plistStr(text, "failureType") === "-5000") { res = await doReq(2); text = await res.text(); }
+    } catch (e) { netErr = true; text = ""; continue; } // обрыв сети → повтор
+    netErr = false;
+    // 204/пусто/5xx = Apple ограничил вход (троттлинг) → НЕ повторяем, выходим сразу
+    if (res.status === 204 || res.status >= 500 || !String(text).trim()) { throttled = true; }
+    break;
+  }
+  if (netErr) return { netError: true };
+  if (throttled) return { throttled: true };
+
+  const failureType = plistStr(text, "failureType");
+  const customerMessage = plistStr(text, "customerMessage");
+  const passwordToken = plistStr(text, "passwordToken");
+  const dsid = plistStr(text, "dsPersonId");
+  const needsCode = customerMessage === "MZFinance.BadLogin.Configurator_message";
+
+  if (passwordToken && dsid) {
+    const acct = {
+      email, passwordToken, directoryServicesIdentifier: dsid,
+      name: [plistStr(text, "firstName"), plistStr(text, "lastName")].filter(Boolean).join(" ") || email,
+      storeFront: res.headers.get("x-set-apple-store-front") || "",
+      password, pod: res.headers.get("pod") || "",
+      guid, // тот же guid, что использован при входе → download возьмёт его из сессии
+    };
+    return { ok: true, account: acct };
+  }
+  if (!code && needsCode) return { needCode: true };
+  if (code && needsCode) return { wrongCode: true };
+  if (failureType === "-5000" || /invalid|incorrect|not.*(found|valid)|неверн/i.test(customerMessage)) return { wrongPassword: true };
+  if (/disabled|locked|заблок/i.test(customerMessage)) return { disabled: true, message: customerMessage };
+  return { glitch: true, failureType, customerMessage, raw: (text || "").slice(0, 200) };
+}
+
 ipcMain.handle("account-login", async (_e, { email, password, code }) => {
+  const tool = ipatoolPath();
+  // 1) НАТИВНЫЙ вход (без подпроцесса ipatool) — быстро и без его багов (паника/спавн/keyring).
+  const n = await appleNativeAuth(email, password, code);
+  // 2) Сетевой сбой (после ретраев). С кодом в ipatool НЕ уходим — он перезапросит код,
+  // и старый станет невалидным. Без кода — ipatool как запасной путь.
+  if (n.netError) {
+    if (code) return { ok: false, needCode: true, error: "Связь с Apple прервалась. Нажмите «Войти» ещё раз — придёт новый код." };
+    return await ipatoolLoginFallback(email, password, code);
+  }
+  if (n.throttled) return { ok: false, error: "Apple временно ограничил вход с этого Apple ID (слишком много попыток за короткое время). Подождите 15–30 минут и попробуйте снова — это ограничение со стороны Apple." };
+  if (n.needCode) return { ok: false, needCode: true };
+  if (n.wrongCode) return { ok: false, needCode: true, error: "Неверный код. Код действует недолго — запросите новый и проверьте пароль (регистр букв, раскладка)." };
+  if (n.wrongPassword) return { ok: false, error: "Неверный Apple ID или пароль. Проверьте регистр букв и раскладку клавиатуры, попробуйте снова." };
+  if (n.disabled) return { ok: false, error: "Этот Apple ID заблокирован Apple. Разблокируйте его на appleid.apple.com и попробуйте снова." };
+  // неожиданный ответ Apple → на всякий случай проверенный путь ipatool (страховка)
+  if (n.glitch || !n.ok) return await ipatoolLoginFallback(email, password, code);
+  // 3) Успех → кладём сессию в keyring ipatool (для последующей загрузки).
+  await run(tool, ipa(["auth", "set-session"]), { input: JSON.stringify(n.account), timeoutMs: 15000 });
+  const info0 = await run(tool, ipa(["auth", "info", "--format", "json", "--non-interactive"]), { timeoutMs: 20000 });
+  const ij0 = lastJSON(info0.out) || {};
+  if (ij0.success && (ij0.name || ij0.email)) return { ok: true };
+  // Мост не сработал (редко) → страховка: обычный вход через ipatool (проверенный путь).
+  return await ipatoolLoginFallback(email, password, code);
+});
+
+// Старый путь входа через ipatool — оставлен как fallback на случай сетевого сбоя
+// нативного входа (умеет прокси). Возвращает { ok / needCode / error }.
+async function ipatoolLoginFallback(email, password, code) {
   const tool = ipatoolPath();
   const args = ["auth", "login", "-e", email, "-p", password, "--format", "json", "--non-interactive"];
   if (code) args.push("--auth-code", code);
-  // Логин НЕ гоним через прокси по умолчанию: много разных Apple ID с одного IP
-  // сервера Apple воспринимает как подозрительный паттерн. Прокси — только fallback,
-  // когда прямой вход упал ИМЕННО из-за сети (не дозвонились до Apple).
   const proxyEnv = await getProxyEnv();
   const phases = [{ env: {}, proxy: false }];
   if (proxyEnv) phases.push({ env: proxyEnv, proxy: true });
@@ -291,7 +419,7 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
       : (raw || "Не удалось войти");
   }
   return { ok: false, error: String(err).slice(0, 240), raw };
-});
+}
 
 ipcMain.handle("account-logout", async () => { await run(ipatoolPath(), ipa(["auth", "revoke"])); return true; });
 

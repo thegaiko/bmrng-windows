@@ -556,7 +556,8 @@ async function doAppleLogin() {
   if (r.ok) { $("#appleid-modal").hidden = true; log("✓ Вход выполнен"); refreshAccount(); return; }
   if (r.needCode) {
     $("#ai-code").hidden = false; setTimeout(() => $("#ai-code").focus(), 50);
-    $("#ai-error").innerHTML = "Введите код с ваших устройств Apple. <b>Если код не приходит — скорее всего неверный пароль</b> (проверьте регистр букв и раскладку).";
+    if (r.error) $("#ai-error").textContent = r.error; // напр. «Неверный код»
+    else $("#ai-error").innerHTML = "Код придёт на ваши устройства Apple. <b>Не приходит?</b> На iPhone: Настройки → [ваше имя] → «Вход и безопасность» → «Получить код проверки».";
     log("Требуется код 2FA — показываю поле");
     return;
   }

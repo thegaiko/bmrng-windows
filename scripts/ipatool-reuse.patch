@@ -1,3 +1,47 @@
+diff --git a/cmd/auth.go b/cmd/auth.go
+index 0a805d7..04ec3d9 100644
+--- a/cmd/auth.go
++++ b/cmd/auth.go
+@@ -4,6 +4,7 @@ import (
+ 	"bufio"
+ 	"errors"
+ 	"fmt"
++	"io"
+ 	"os"
+ 	"strings"
+ 	"time"
+@@ -24,10 +25,31 @@ func authCmd() *cobra.Command {
+ 	cmd.AddCommand(loginCmd())
+ 	cmd.AddCommand(infoCmd())
+ 	cmd.AddCommand(revokeCmd())
++	cmd.AddCommand(setSessionCmd())
+ 
+ 	return cmd
+ }
+ 
++// set-session принимает JSON аккаунта (полученный нативным входом bmrng) из stdin
++// и сохраняет его в keyring — дальше download работает без входа через ipatool.
++func setSessionCmd() *cobra.Command {
++	return &cobra.Command{
++		Use:   "set-session",
++		Short: "Import a pre-authenticated session (account JSON via stdin)",
++		RunE: func(cmd *cobra.Command, args []string) error {
++			data, err := io.ReadAll(os.Stdin)
++			if err != nil {
++				return fmt.Errorf("failed to read stdin: %w", err)
++			}
++			if err := dependencies.AppStore.ImportAccount(data); err != nil {
++				return err
++			}
++			dependencies.Logger.Log().Bool("success", true).Send()
++			return nil
++		},
++	}
++}
++
+ func loginCmd() *cobra.Command {
+ 	promptForAuthCode := func() (string, error) {
+ 		authCode, err := bufio.NewReader(os.Stdin).ReadString('\n')
 diff --git a/cmd/download.go b/cmd/download.go
 index b1e2108..8b824b4 100644
 --- a/cmd/download.go
@@ -26,8 +70,33 @@ index b1e2108..8b824b4 100644
  
  	return cmd
  }
+diff --git a/pkg/appstore/account.go b/pkg/appstore/account.go
+index 9e2f83c..4b2d151 100644
+--- a/pkg/appstore/account.go
++++ b/pkg/appstore/account.go
+@@ -8,4 +8,7 @@ type Account struct {
+ 	StoreFront          string `json:"storeFront,omitempty"`
+ 	Password            string `json:"password,omitempty"`
+ 	Pod                 string `json:"pod,omitempty"`
++	// Guid — если задан (нативный вход bmrng сохранил его в сессию), download использует
++	// именно его, а не вычисляет из MAC. Гарантирует один guid на входе и загрузке.
++	Guid string `json:"guid,omitempty"`
+ }
+diff --git a/pkg/appstore/appstore.go b/pkg/appstore/appstore.go
+index e91ddb7..d7f4250 100644
+--- a/pkg/appstore/appstore.go
++++ b/pkg/appstore/appstore.go
+@@ -12,6 +12,8 @@ type AppStore interface {
+ 	Login(input LoginInput) (LoginOutput, error)
+ 	// AccountInfo returns the information of the authenticated account.
+ 	AccountInfo() (AccountInfoOutput, error)
++	// ImportAccount saves a pre-authenticated session (account JSON) to the keyring.
++	ImportAccount(data []byte) error
+ 	// Revoke revokes the active credentials.
+ 	Revoke() error
+ 	// Lookup looks apps up based on the specified bundle identifier.
 diff --git a/pkg/appstore/appstore_download.go b/pkg/appstore/appstore_download.go
-index f86ee77..f02d4c1 100644
+index f86ee77..ad815f3 100644
 --- a/pkg/appstore/appstore_download.go
 +++ b/pkg/appstore/appstore_download.go
 @@ -25,6 +25,10 @@ type DownloadInput struct {
@@ -41,7 +110,31 @@ index f86ee77..f02d4c1 100644
  }
  
  type DownloadOutput struct {
-@@ -94,9 +98,16 @@ func (t *appstore) Download(input DownloadInput) (DownloadOutput, error) {
+@@ -33,15 +37,18 @@ type DownloadOutput struct {
+ }
+ 
+ func (t *appstore) Download(input DownloadInput) (DownloadOutput, error) {
+-	macAddr, err := t.machine.MacAddress()
+-	if err != nil {
+-		return DownloadOutput{}, fmt.Errorf("failed to get mac address: %w", err)
++	guid := input.Account.Guid
++	if guid == "" {
++		macAddr, err := t.machine.MacAddress()
++		if err != nil {
++			return DownloadOutput{}, fmt.Errorf("failed to get mac address: %w", err)
++		}
++		guid = strings.ReplaceAll(strings.ToUpper(macAddr), ":", "")
+ 	}
+ 
+-	guid := strings.ReplaceAll(strings.ToUpper(macAddr), ":", "")
+-
+ 	externalVersionID := input.ExternalVersionID
+ 	if externalVersionID == "" && input.Platform == PlatformAppleTV {
++		var err error
+ 		externalVersionID, err = t.lookupLatestExternalVersionID(input.Account, input.App, input.Platform)
+ 		if err != nil {
+ 			return DownloadOutput{}, fmt.Errorf("failed to resolve platform version: %w", err)
+@@ -94,9 +101,16 @@ func (t *appstore) Download(input DownloadInput) (DownloadOutput, error) {
  
  	tmpPath := fmt.Sprintf("%s.tmp", destination)
  
@@ -61,7 +154,7 @@ index f86ee77..f02d4c1 100644
  	}
  
  	err = t.applyPatches(item, input.Account, tmpPath, destination)
-@@ -186,6 +197,26 @@ type downloadResult struct {
+@@ -186,6 +200,26 @@ type downloadResult struct {
  	Items           []downloadItemResult `plist:"songList,omitempty"`
  }
  
@@ -88,7 +181,7 @@ index f86ee77..f02d4c1 100644
  func (t *appstore) downloadFile(src, dst string, progress *progressbar.ProgressBar) error {
  	req, err := t.httpClient.NewRequest("GET", src, nil)
  	if err != nil {
-@@ -341,9 +372,28 @@ func (t *appstore) applyPatches(item downloadItemResult, acc Account, src, dst s
+@@ -341,9 +375,28 @@ func (t *appstore) applyPatches(item downloadItemResult, acc Account, src, dst s
  	dstZip := zip.NewWriter(dstFile)
  	defer dstZip.Close()
  
