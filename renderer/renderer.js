@@ -500,6 +500,8 @@ function wireMain() {
   $("#foot-tg").onclick = () => api.openExternal("https://t.me/thegaiko");
   $("#itunes-install").onclick = () => api.openExternal("https://www.apple.com/itunes/download/win64");
   $("#itunes-dismiss").onclick = () => ($("#itunes-banner").hidden = true);
+  $("#sub-yes").onclick = () => { api.openExternal("https://t.me/thegaiko"); $("#subscribe-modal").hidden = true; };
+  $("#sub-no").onclick = () => ($("#subscribe-modal").hidden = true);
   $("#btn-log").onclick = () => ($("#log-modal").hidden = false);
   $("#log-close").onclick = () => ($("#log-modal").hidden = true);
   $("#add-id").onclick = () => { $("#id-input").value = ""; $("#id-modal").hidden = false; };
@@ -643,6 +645,11 @@ async function installList(list) {
   if (notOwned.length && !cancelled) showNotOwnedModal(notOwned);
   else if (notInstalled.length && !cancelled) showNotInstalledModal(notInstalled);
   else if (corrupt.length && !cancelled) showCorruptModal(corrupt);
+  // после первой успешной установки — дружеское предложение подписаться (один раз)
+  else if (done > 0 && !cancelled && !state.cfg.tgPromptShown) {
+    state.cfg = await api.configSet({ tgPromptShown: true });
+    $("#subscribe-modal").hidden = false;
+  }
   setTimeout(() => showProgress(false), 3000);
   setTimeout(refreshDevices, 2500);
 }
