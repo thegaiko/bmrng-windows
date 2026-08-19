@@ -338,22 +338,24 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   // 2) Сетевой сбой (после ретраев). С кодом в ipatool НЕ уходим — он перезапросит код,
   // и старый станет невалидным. Без кода — ipatool как запасной путь.
   if (n.netError) {
+    track("login", "net_error");
     if (code) return { ok: false, needCode: true, error: "Связь с Apple прервалась. Нажмите «Войти» ещё раз — придёт новый код." };
     return await ipatoolLoginFallback(email, password, code);
   }
-  if (n.throttled) return { ok: false, error: "Apple временно ограничил вход с этого Apple ID (слишком много попыток за короткое время). Подождите 15–30 минут и попробуйте снова — это ограничение со стороны Apple." };
-  if (n.needCode) return { ok: false, needCode: true };
-  if (n.wrongCode) return { ok: false, needCode: true, error: "Неверный код. Код действует недолго — запросите новый и проверьте пароль (регистр букв, раскладка)." };
-  if (n.wrongPassword) return { ok: false, error: "Неверный Apple ID или пароль. Проверьте регистр букв и раскладку клавиатуры, попробуйте снова." };
-  if (n.disabled) return { ok: false, error: "Этот Apple ID заблокирован Apple. Разблокируйте его на appleid.apple.com и попробуйте снова." };
+  if (n.throttled) { track("login", "throttled"); return { ok: false, error: "Apple временно ограничил вход с этого Apple ID (слишком много попыток за короткое время). Подождите 15–30 минут и попробуйте снова — это ограничение со стороны Apple." }; }
+  if (n.needCode) { track("login", "need_code"); return { ok: false, needCode: true }; }
+  if (n.wrongCode) { track("login", "wrong_code"); return { ok: false, needCode: true, error: "Неверный код. Код действует недолго — запросите новый и проверьте пароль (регистр букв, раскладка)." }; }
+  if (n.wrongPassword) { track("login", "wrong_password"); return { ok: false, error: "Неверный Apple ID или пароль. Проверьте регистр букв и раскладку клавиатуры, попробуйте снова." }; }
+  if (n.disabled) { track("login", "disabled"); return { ok: false, error: "Этот Apple ID заблокирован Apple. Разблокируйте его на appleid.apple.com и попробуйте снова." }; }
   // неожиданный ответ Apple → на всякий случай проверенный путь ipatool (страховка)
-  if (n.glitch || !n.ok) return await ipatoolLoginFallback(email, password, code);
+  if (n.glitch || !n.ok) { track("login", "glitch"); return await ipatoolLoginFallback(email, password, code); }
   // 3) Успех → кладём сессию в keyring ipatool (для последующей загрузки).
   await run(tool, ipa(["auth", "set-session"]), { input: JSON.stringify(n.account), timeoutMs: 15000 });
   const info0 = await run(tool, ipa(["auth", "info", "--format", "json", "--non-interactive"]), { timeoutMs: 20000 });
   const ij0 = lastJSON(info0.out) || {};
-  if (ij0.success && (ij0.name || ij0.email)) return { ok: true };
+  if (ij0.success && (ij0.name || ij0.email)) { track("login", "ok"); return { ok: true }; }
   // Мост не сработал (редко) → страховка: обычный вход через ipatool (проверенный путь).
+  track("login", "bridge_fail");
   return await ipatoolLoginFallback(email, password, code);
 });
 
@@ -631,6 +633,7 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
       : diskFull ? `✗ «${app.name}»: не хватило места на диске (нужно ~1–2 ГБ свободно)`
       : netError ? `✗ «${app.name}»: нет связи с серверами Apple`
       : corrupt ? `✗ «${app.name}»: файл повреждается при загрузке` : `✗ ${err}` });
+    track("install", notOwned ? "not_owned" : diskFull ? "disk_full" : netError ? "net_error" : corrupt ? "corrupt" : "download_failed", app.name);
     return { ok: false, error: err, notOwned, corrupt, netError, diskFull, freeGB, badMB, peakMB, total: sels.length, triedFrom: start };
   }
   // bundle id из IPA — чтобы после установки убедиться, что приложение реально появилось на телефоне
@@ -668,12 +671,15 @@ ipcMain.handle("install", async (e, { app, udid, fromIndex }) => {
     }
     if (onDevice) {
       send({ phase: "done", progress: 1, line: "✓ Установлено" });
+      track("install", usedCache ? "cache_ok" : "ok", app.name);
       return { ok: true, usedIndex, total: sels.length };
     }
     send({ phase: "error", line: `✗ «${app.name}» не появилось на телефоне (установка не завершилась). Баланс не списан.` });
+    track("install", "not_installed", app.name);
     return { ok: false, error: "приложение не появилось на телефоне", notInstalled: true, bundleId, total: sels.length };
   }
   send({ phase: "error", line: "✗ ошибка установки" });
+  track("install", "install_failed", app.name);
   return { ok: false, error: "install failed", total: sels.length };
 });
 
@@ -705,6 +711,17 @@ async function apiAuth(pathname, method, body) {
     return { status: res.status, data: await res.json().catch(() => ({})) };
   } catch (e) { return { status: 0, data: { detail: "Ошибка сети" } }; }
 }
+// Телеметрия: отправляем исход входа/установки на сервер (без личных данных).
+// fire-and-forget — не влияет на пользователя.
+function track(kind, outcome, detail) {
+  try {
+    apiAuth("/api/event/", "POST", {
+      kind, outcome, platform: isWin ? "win" : "mac",
+      version: app.getVersion(), detail: (detail || "").slice(0, 120),
+    }).catch(() => {});
+  } catch {}
+}
+
 ipcMain.handle("bmrng-register", async (_e, b) => apiPost("/api/register/", { ...b, platform: isWin ? "win" : "mac", device_id: machineId() }));
 ipcMain.handle("bmrng-verify", async (_e, b) => apiPost("/api/verify-email/", b));
 ipcMain.handle("bmrng-login", async (_e, b) => apiPost("/api/login/", b));
