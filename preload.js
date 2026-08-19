@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("bmrng", {
   devices: () => ipcRenderer.invoke("devices"),
   checkItunes: () => ipcRenderer.invoke("check-itunes"),
+  announcement: () => ipcRenderer.invoke("announcement"),
   accountInfo: () => ipcRenderer.invoke("account-info"),
   accountLogin: (p) => ipcRenderer.invoke("account-login", p),
   accountLogout: () => ipcRenderer.invoke("account-logout"),

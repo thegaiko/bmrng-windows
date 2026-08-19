@@ -94,8 +94,24 @@ function showApp() {
   refreshDevices();
   refreshBalance();
   checkItunes();
+  checkAnnouncement();
   setInterval(() => { if (!state.busy) refreshDevices(); }, 3000);
+  setInterval(checkAnnouncement, 60000); // объявление из ЛК — опрос раз в минуту
   wireMain();
+}
+
+// объявление-баннер (управляется из ЛК → Настройки)
+async function checkAnnouncement() {
+  const b = $("#announce-banner");
+  if (!b) return;
+  try {
+    const a = await api.announcement();
+    if (a && a.active && a.text) {
+      $("#announce-text").textContent = a.text;
+      b.className = "announce-banner " + (["info", "warning", "danger"].includes(a.kind) ? a.kind : "warning");
+      b.hidden = false;
+    } else { b.hidden = true; }
+  } catch { b.hidden = true; }
 }
 
 // на Windows проверяем драйвер Apple Mobile Device (нужен для связи с iPhone)

@@ -42,6 +42,17 @@ button{font-family:inherit;cursor:pointer}
 .dots span.on{width:20px;background:var(--accent)}
 .back{align-self:flex-start;color:var(--faint);background:none;border:none;font-size:14px;font-weight:600}
 
+/* ── объявление-баннер (из ЛК) ── */
+.announce-banner{display:flex;align-items:center;gap:12px;margin:12px 20px 0;padding:12px 16px;border-radius:14px;font-size:14px;line-height:1.4;font-weight:500}
+.announce-banner .ab-ico{flex:none;width:24px;height:24px;border-radius:99px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:#fff}
+.announce-banner .ab-text{flex:1;white-space:pre-wrap}
+.announce-banner.info{background:rgba(0,90,255,.08);border:1px solid rgba(0,90,255,.3);color:var(--ink)}
+.announce-banner.info .ab-ico{background:var(--accent)}
+.announce-banner.warning{background:rgba(183,121,31,.1);border:1px solid rgba(183,121,31,.32);color:var(--ink)}
+.announce-banner.warning .ab-ico{background:var(--warn)}
+.announce-banner.danger{background:rgba(218,59,64,.09);border:1px solid rgba(218,59,64,.32);color:var(--ink)}
+.announce-banner.danger .ab-ico{background:var(--danger)}
+
 /* ── баннер драйвера Apple (Windows) ── */
 .itunes-banner{display:flex;align-items:center;gap:14px;margin:12px 20px 0;padding:12px 14px;background:rgba(183,121,31,.1);border:1px solid rgba(183,121,31,.32);border-radius:14px}
 .itunes-banner .ib-ico{flex:none;width:26px;height:26px;border-radius:99px;background:var(--warn);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px}

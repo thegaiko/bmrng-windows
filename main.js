@@ -789,6 +789,15 @@ function cmpVersions(a, b) {
 
 ipcMain.handle("app-version", async () => app.getVersion());
 
+// объявление-баннер (управляется из ЛК → Настройки)
+ipcMain.handle("announcement", async () => {
+  try {
+    const res = await fetch("https://bmrng.app/api/announcement/", { cache: "no-store" });
+    if (!res.ok) return { active: false };
+    return await res.json();
+  } catch { return { active: false }; }
+});
+
 // режим оплаты (управляется с сервера через version.json → payments)
 ipcMain.handle("pay-config", async () => {
   try {
