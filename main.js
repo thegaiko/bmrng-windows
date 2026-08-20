@@ -245,6 +245,7 @@ function plistStr(xml, key) {
 // а 2-й запрос (пароль+код 2FA) обязан их нести — иначе Apple не связывает код с сессией
 // и отдаёт пустой ответ. Без этого 2FA-вход не проходил (принимали за «троттлинг»).
 const _authCookies = {}; // email → { name: value }
+const _authPods = {};    // email → pod-номер (Apple назначает; шлём на p{pod}-buy.itunes.apple.com)
 function cookieHeader(key) {
   const jar = _authCookies[key] || {};
   return Object.keys(jar).map((k) => `${k}=${jar[k]}`).join("; ");
@@ -294,15 +295,23 @@ async function appleNativeAuth(email, password, code) {
   if (!code) _authCookies[jarKey] = {}; // вход без кода = новая сессия → свежие cookie
   const doReq = async (attempt) => {
     const headers = {
-      "User-Agent": "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6",
+      // UA 1-в-1 как у стабильно работающих клиентов (Apple Configurator 2.15) — старый UA
+      // Apple принимает мягче, чем 2.17.
+      "User-Agent": "Configurator/2.15 (Macintosh; OS X 11.0.0; 16G29) AppleWebKit/2603.3.8",
       "Content-Type": "application/x-www-form-urlencoded",
     };
     const ch = cookieHeader(jarKey);
     if (ch) headers["Cookie"] = ch; // 2-й запрос (с кодом) несёт cookie 1-го
-    const r = await fetch(`https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate?guid=${guid}`, {
+    // pod-хост: Apple раскидывает аккаунты по подам. Первый запрос идёт на общий хост,
+    // из ответа берём pod и держим 2-й запрос (с кодом) на том же p{pod}-buy — так сессия
+    // и cookie не «переезжают» на другой под (частая причина пустого ответа на код).
+    const host = _authPods[jarKey] ? `p${_authPods[jarKey]}-buy.itunes.apple.com` : "buy.itunes.apple.com";
+    const r = await fetch(`https://${host}/WebObjects/MZFinance.woa/wa/authenticate?guid=${guid}`, {
       method: "POST", headers, body: reqBody(attempt),
     });
     storeCookies(jarKey, r); // запоминаем session-cookie от Apple
+    const pod = r.headers.get("pod"); // Apple вернул назначенный под → фиксируем
+    if (pod && /^\d+$/.test(pod)) _authPods[jarKey] = pod;
     return r;
   };
   // Вход ТОЛЬКО напрямую (через прокси Apple отдаёт 204 — auth из дата-центра не принимает).
