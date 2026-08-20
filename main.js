@@ -257,6 +257,21 @@ function storeCookies(key, res) {
     if (i > 0) jar[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
   }
 }
+// Гейт против ретрай-шторма. Apple лимитирует вход ПО АККАУНТУ, а не по IP: когда юзер
+// долбит «Войти» подряд, каждая попытка усиливает троттлинг (пустой 204). Здесь мы после
+// отказа на ввод пароля держим кулдаун, растущий с каждым страйком (20с→40→80→160→макс 300),
+// и просто НЕ отправляем запрос в Apple, пока он не истёк. Так шторм гасится в зародыше,
+// а телеметрия отделяет «мы сами долбим» (rate_self) от реального ответа Apple.
+const _loginGate = {}; // email → { until: ms, strikes: n }
+function gateState(key) { return _loginGate[key] || (_loginGate[key] = { until: 0, strikes: 0 }); }
+function gateBump(key) {
+  const g = gateState(key);
+  g.strikes = Math.min(g.strikes + 1, 6);
+  const wait = Math.min(20000 * Math.pow(2, g.strikes - 1), 300000); // 20с … 5мин
+  g.until = Date.now() + wait;
+  return Math.ceil(wait / 1000);
+}
+function gateClear(key) { _loginGate[key] = { until: 0, strikes: 0 }; }
 // Нативный вход в Apple ID напрямую (без подпроцесса ipatool) — как в приложении Сбера:
 // один HTTPS-запрос authenticate. Быстро и без багов спавна/паники/keyring.
 async function appleNativeAuth(email, password, code) {
@@ -293,7 +308,7 @@ async function appleNativeAuth(email, password, code) {
   // Вход ТОЛЬКО напрямую (через прокси Apple отдаёт 204 — auth из дата-центра не принимает).
   // Ретраим ТОЛЬКО при обрыве сети (fetch кинул). НЕ долбим при 204/пустом ответе —
   // это троттлинг Apple, и повторы его только усиливают.
-  let res, text, netErr = false, throttled = false;
+  let res, text, netErr = false, throttled = false, httpStatus = 0, emptyBody = false;
   for (let i = 0; i < 3; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, 2000));
     try {
@@ -301,12 +316,14 @@ async function appleNativeAuth(email, password, code) {
       if (plistStr(text, "failureType") === "-5000") { res = await doReq(2); text = await res.text(); }
     } catch (e) { netErr = true; text = ""; continue; } // обрыв сети → повтор
     netErr = false;
+    httpStatus = res.status;
+    emptyBody = !String(text).trim();
     // 204/пусто/5xx = Apple ограничил вход (троттлинг) → НЕ повторяем, выходим сразу
-    if (res.status === 204 || res.status >= 500 || !String(text).trim()) { throttled = true; }
+    if (res.status === 204 || res.status >= 500 || emptyBody) { throttled = true; }
     break;
   }
   if (netErr) return { netError: true };
-  if (throttled) return { throttled: true };
+  if (throttled) return { throttled: true, httpStatus, emptyBody };
 
   const failureType = plistStr(text, "failureType");
   const customerMessage = plistStr(text, "customerMessage");
@@ -333,6 +350,18 @@ async function appleNativeAuth(email, password, code) {
 
 ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   const tool = ipatoolPath();
+  const gk = String(email || "").toLowerCase();
+  // 0) ГЕЙТ против шторма: только для попыток ВВОДА ПАРОЛЯ (шаг с кодом 2FA — это прогресс,
+  //    его не блокируем). Если кулдаун не истёк — вообще не трогаем Apple, гасим шторм у себя.
+  if (!code) {
+    const g = gateState(gk);
+    const leftMs = g.until - Date.now();
+    if (leftMs > 0) {
+      const sec = Math.ceil(leftMs / 1000);
+      track("login", "rate_self", `wait=${sec}s;strikes=${g.strikes}`);
+      return { ok: false, cooldown: sec, error: `Слишком много попыток входа подряд. Apple временно блокирует вход по этому Apple ID — это защита Apple, а не программы. Подождите ${sec} сек, кнопка станет активной сама. За это время проверьте пароль, чтобы ввести его верно с первого раза.` };
+    }
+  }
   // 1) НАТИВНЫЙ вход (без подпроцесса ipatool) — быстро и без его багов (паника/спавн/keyring).
   const n = await appleNativeAuth(email, password, code);
   // 2) Сетевой сбой (после ретраев). С кодом в ipatool НЕ уходим — он перезапросит код,
@@ -342,10 +371,20 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
     if (code) return { ok: false, needCode: true, error: "Связь с Apple прервалась. Нажмите «Войти» ещё раз — придёт новый код." };
     return await ipatoolLoginFallback(email, password, code);
   }
-  if (n.throttled) { track("login", "throttled"); return { ok: false, error: "Apple временно ограничил вход с этого Apple ID (слишком много попыток за короткое время). Подождите 15–30 минут и попробуйте снова — это ограничение со стороны Apple." }; }
-  if (n.needCode) { track("login", "need_code"); return { ok: false, needCode: true }; }
+  if (n.throttled) {
+    // Разбиваем бывший общий «throttled» по реальному ответу Apple, чтобы в телеметрии
+    // видеть, что это: пустой 204 / серверная 5xx / 200-но-пусто. (Верный пароль Apple
+    // тоже иногда прячет за пустым 204 — потому и вводим кулдаун вместо долбёжки.)
+    const oc = n.httpStatus === 204 ? "throttled_204"
+      : n.httpStatus >= 500 ? "throttled_5xx"
+      : n.emptyBody ? "throttled_empty" : "throttled_other";
+    const sec = code ? 20 : gateBump(gk); // ввод пароля → включаем/растим кулдаун
+    track("login", oc, `http=${n.httpStatus};strikes=${gateState(gk).strikes}`);
+    return { ok: false, cooldown: sec, error: `Apple временно ограничил вход с этого Apple ID (слишком много попыток за короткое время) — это ограничение Apple. Подождите ${sec} сек и попробуйте снова. Пока ждёте — проверьте, что пароль верный (раскладка, заглавные буквы).` };
+  }
+  if (n.needCode) { gateClear(gk); track("login", "need_code"); return { ok: false, needCode: true }; } // пароль принят → страйки сброшены
   if (n.wrongCode) { track("login", "wrong_code"); return { ok: false, needCode: true, error: "Неверный код. Код действует недолго — запросите новый и проверьте пароль (регистр букв, раскладка)." }; }
-  if (n.wrongPassword) { track("login", "wrong_password"); return { ok: false, error: "Неверный Apple ID или пароль. Проверьте регистр букв и раскладку клавиатуры, попробуйте снова." }; }
+  if (n.wrongPassword) { const sec = gateBump(gk); track("login", "wrong_password"); return { ok: false, cooldown: sec, error: "Неверный Apple ID или пароль. Проверьте регистр букв и раскладку клавиатуры, попробуйте снова." }; }
   if (n.disabled) { track("login", "disabled"); return { ok: false, error: "Этот Apple ID заблокирован Apple. Разблокируйте его на appleid.apple.com и попробуйте снова." }; }
   // неожиданный ответ Apple → на всякий случай проверенный путь ipatool (страховка)
   if (n.glitch || !n.ok) { track("login", "glitch"); return await ipatoolLoginFallback(email, password, code); }
@@ -353,7 +392,7 @@ ipcMain.handle("account-login", async (_e, { email, password, code }) => {
   await run(tool, ipa(["auth", "set-session"]), { input: JSON.stringify(n.account), timeoutMs: 15000 });
   const info0 = await run(tool, ipa(["auth", "info", "--format", "json", "--non-interactive"]), { timeoutMs: 20000 });
   const ij0 = lastJSON(info0.out) || {};
-  if (ij0.success && (ij0.name || ij0.email)) { track("login", "ok"); return { ok: true }; }
+  if (ij0.success && (ij0.name || ij0.email)) { gateClear(gk); track("login", "ok"); return { ok: true }; }
   // Мост не сработал (редко) → страховка: обычный вход через ipatool (проверенный путь).
   track("login", "bridge_fail");
   return await ipatoolLoginFallback(email, password, code);

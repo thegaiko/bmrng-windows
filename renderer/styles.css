@@ -129,6 +129,8 @@ button{font-family:inherit;cursor:pointer}
 .apps-head-actions{display:flex;align-items:center;gap:10px}
 .round-btn{width:28px;height:28px;border-radius:99px;background:var(--chip);border:1px solid var(--line);color:var(--accent);font-weight:700;font-size:13px}
 .apps-note{display:flex;gap:8px;align-items:flex-start;background:rgba(183,121,31,.08);border:1px solid rgba(183,121,31,.28);color:var(--warn);border-radius:11px;padding:9px 12px;font-size:12.5px;line-height:1.45;margin-bottom:12px}
+.pass-hint{background:rgba(183,121,31,.08);border:1px solid rgba(183,121,31,.28);color:var(--warn);border-radius:10px;padding:9px 11px;font-size:12.5px;line-height:1.5;margin-top:2px}
+.pass-hint b{color:var(--warn)}
 .apps-note span:first-child{font-size:14px;line-height:1.2;flex:none}
 .apps-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;overflow:auto;flex:1;padding-right:2px}
 .chip{display:flex;align-items:center;gap:10px;padding:9px;border-radius:12px;background:var(--chip);border:1.5px solid var(--line);transition:border-color .12s,background .12s}

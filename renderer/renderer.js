@@ -546,6 +546,7 @@ function wireMain() {
   $("#tu-pay").onclick = submitTopup;
   $("#ai-close").onclick = () => ($("#appleid-modal").hidden = true);
   $("#ai-login").onclick = doAppleLogin;
+  $("#ai-pass").onfocus = () => ($("#ai-pass-hint").hidden = false); // подсказка «введите пароль верно»
   attachEye($("#ai-pass"));
   $("#ai-pass").onkeydown = (e) => { if (e.key === "Enter") doAppleLogin(); };
   $("#ai-code").onkeydown = (e) => { if (e.key === "Enter") doAppleLogin(); };
@@ -556,8 +557,11 @@ function wireMain() {
 }
 
 function loginAppleId() {
+  clearInterval(_aiCdTimer);
   $("#ai-email").value = ""; $("#ai-pass").value = ""; $("#ai-code").value = "";
   $("#ai-code").hidden = true; $("#ai-error").textContent = "";
+  $("#ai-pass-hint").hidden = true;
+  $("#ai-login").disabled = false; $("#ai-login").textContent = "Войти";
   $("#appleid-modal").hidden = false;
   setTimeout(() => $("#ai-email").focus(), 50);
 }
@@ -569,10 +573,10 @@ async function doAppleLogin() {
   $("#ai-login").disabled = true; $("#ai-error").textContent = "Вход…";
   log(`Вход в Apple ID ${email}…`);
   const r = await api.accountLogin(code ? { email, password, code } : { email, password });
-  $("#ai-login").disabled = false;
   if (r.raw) log("  ipatool: " + r.raw);
-  if (r.ok) { $("#appleid-modal").hidden = true; log("✓ Вход выполнен"); refreshAccount(); return; }
+  if (r.ok) { $("#ai-login").disabled = false; $("#appleid-modal").hidden = true; log("✓ Вход выполнен"); refreshAccount(); return; }
   if (r.needCode) {
+    $("#ai-login").disabled = false;
     $("#ai-code").hidden = false; setTimeout(() => $("#ai-code").focus(), 50);
     if (r.error) $("#ai-error").textContent = r.error; // напр. «Неверный код»
     else $("#ai-error").innerHTML = "Введите код с ваших устройств Apple. <b>Если код не приходит — скорее всего неверный пароль</b> (проверьте регистр букв и раскладку).";
@@ -581,6 +585,24 @@ async function doAppleLogin() {
   }
   $("#ai-error").textContent = r.error || "Не удалось войти";
   log("✗ " + (r.error || "не удалось войти"));
+  // Кулдаун от Apple/шторма: держим кнопку выключенной с обратным отсчётом, чтобы юзер
+  // не долбил вход (каждая лишняя попытка только усиливает блокировку со стороны Apple).
+  if (r.cooldown && r.cooldown > 0) startAiCooldown(r.cooldown);
+  else $("#ai-login").disabled = false;
+}
+let _aiCdTimer = null;
+function startAiCooldown(sec) {
+  clearInterval(_aiCdTimer);
+  const btn = $("#ai-login");
+  let left = sec;
+  btn.disabled = true;
+  const tick = () => {
+    if (left <= 0) { clearInterval(_aiCdTimer); btn.disabled = false; btn.textContent = "Войти"; return; }
+    btn.textContent = `Подождите ${left} сек…`;
+    left--;
+  };
+  tick();
+  _aiCdTimer = setInterval(tick, 1000);
 }
 
 async function checkOwned() {
